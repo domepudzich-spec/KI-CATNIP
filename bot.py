@@ -2199,6 +2199,168 @@ async def botinfo(interaction: discord.Interaction):
 
 active_riddle_events = {}
 
+async def generate_ai_riddle_stations(
+    channel_id: int,
+    username: str,
+    theme: str,
+    count: int,
+    difficulty: str,
+):
+    """
+    Erzeugt neue Rätsel über Gemini.
+    Erwartet strikt JSON. Bei Fehlern gibt die Funktion None zurück,
+    damit auf feste Presets zurückgefallen werden kann.
+    """
+    prompt = f"""
+Erstelle {count} spielbare FINAL FANTASY XIV Rätselstationen für ein Discord-Event.
+
+Thema: {theme}
+Schwierigkeit: {difficulty}
+
+WICHTIG:
+- Antworte ausschließlich als gültiges JSON.
+- Keine Markdown-Codeblöcke.
+- Keine Kommentare außerhalb des JSON.
+- Genau {count} Stationen.
+- Jede Station muss genau eine eindeutige Lösung haben.
+- Jede Station braucht genau 3 Hinweise, zunehmend deutlicher.
+- Offizielle FFXIV-Fakten nur verwenden, wenn du dir sicher bist.
+- Frei erfundene Inhalte deutlich als Event-Lore behandeln.
+- Keine Storyspoiler erzwingen.
+- Lösungen kurz halten, damit Spieler sie tippen können.
+
+JSON-Format:
+{{
+  "stations": [
+    {{
+      "title": "Station 1 — ...",
+      "question": "...",
+      "answer": "...",
+      "hints": ["...", "...", "..."]
+    }}
+  ]
+}}
+""".strip()
+
+    try:
+        answer = await ask_ai(
+            channel_id,
+            username,
+            prompt,
+            remember=False,
+            force_web=False,
+        )
+
+        # Quellenblock entfernen, falls ask_ai doch Quellen angehängt hat.
+        answer = answer.split("\n**Quellen:**", 1)[0].strip()
+
+        # Optional umschließende Codefences entfernen.
+        answer = re.sub(r"^```(?:json)?\s*", "", answer, flags=re.IGNORECASE)
+        answer = re.sub(r"\s*```$", "", answer)
+
+        payload = json.loads(answer)
+        stations = payload.get("stations", [])
+
+        cleaned = []
+        for i, station in enumerate(stations[:count], start=1):
+            title = str(station.get("title", f"Station {i}")).strip()
+            question = str(station.get("question", "")).strip()
+            answer_value = str(station.get("answer", "")).strip()
+            hints = station.get("hints", [])
+
+            if not question or not answer_value or not isinstance(hints, list):
+                continue
+
+            hints = [str(h).strip() for h in hints if str(h).strip()][:3]
+            if len(hints) != 3:
+                continue
+
+            cleaned.append(
+                {
+                    "title": title,
+                    "question": question,
+                    "answer": answer_value,
+                    "hints": hints,
+                }
+            )
+
+        if len(cleaned) == count:
+            return cleaned
+
+    except Exception as exc:
+        print(f"KI-Rätselgenerierung fehlgeschlagen: {type(exc).__name__}: {exc}")
+
+    return None
+
+
+def _fallback_riddle_stations(theme: str, count: int):
+    """
+    Nutzt feste Presets als Sicherheitsnetz.
+    """
+    preset_name = theme if theme in RIDDLE_PRESETS else "Event-Lore"
+    return [dict(s) for s in RIDDLE_PRESETS[preset_name][:count]]
+
+
+async def _start_linked_endboss(
+    interaction: discord.Interaction,
+    boss_name: str,
+):
+    """
+    Startet nach einem abgeschlossenen Rätsel-Event automatisch
+    einen Bosskampf im selben Channel.
+    """
+    if interaction.guild is None:
+        return False
+
+    key = _boss_key(interaction.guild.id, interaction.channel_id)
+
+    if key in active_boss_battles:
+        return False
+
+    if boss_name not in BOSS_TEMPLATES:
+        return False
+
+    template = BOSS_TEMPLATES[boss_name]
+    state = {
+        "name": boss_name,
+        "hp": template["max_hp"],
+        "max_hp": template["max_hp"],
+        "party_hp": template["party_hp"],
+        "party_max_hp": template["party_hp"],
+        "wrong_damage": template["wrong_damage"],
+        "phase": 0,
+        "phases": template["phases"],
+        "correct": 0,
+        "wrong": 0,
+        "answered_users": set(),
+        "players": {},
+    }
+
+    lobby = boss_party_lobbies.get(key)
+    if lobby and lobby["players"]:
+        state["players"] = {
+            uid: dict(data) for uid, data in lobby["players"].items()
+        }
+        state["party_max_hp"] = sum(p["max_hp"] for p in state["players"].values())
+        state["party_hp"] = sum(p["hp"] for p in state["players"].values())
+
+    active_boss_battles[key] = state
+
+    await interaction.channel.send(
+        embed=boss_embed(
+            state,
+            message=(
+                f"⚔️ **Das letzte Siegel zerbricht!** "
+                f"Aus dem Äther tritt **{boss_name}** hervor.\n"
+                "Der Rätselpfad endet — der Bosskampf beginnt!"
+            ),
+        ),
+        view=BossCombatView(),
+    )
+    return True
+
+
+
 RIDDLE_PRESETS = {
     "FFXIV Wissen": [
         {
@@ -2340,6 +2502,14 @@ def riddle_event_embed(state: dict, *, message: str | None = None) -> discord.Em
         inline=True,
     )
     embed.add_field(
+        name="🧠 Modus",
+        value=(
+            f"**{state.get('source', 'Preset')}**\n"
+            f"Schwierigkeit: **{state.get('difficulty', 'Mittel')}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
         name="❌ Fehlversuche",
         value=f"**{state['wrong']}**",
         inline=True,
@@ -2358,8 +2528,13 @@ def riddle_event_embed(state: dict, *, message: str | None = None) -> discord.Em
         value="Antwortet mit `/raetselantwort lösung:<eure Lösung>`.",
         inline=False,
     )
+    boss_name = state.get("endboss", "none")
+    boss_info = f" • Endboss: {boss_name}" if boss_name != "none" else ""
     embed.set_footer(
-        text="Wertung: +100 richtige Lösung • -25 pro Hinweis • -10 pro Fehlversuch"
+        text=(
+            "Wertung: +100 richtige Lösung • -25 pro Hinweis • -10 pro Fehlversuch"
+            + boss_info
+        )
     )
     return embed
 
@@ -2374,20 +2549,37 @@ def riddle_admin_solution_text(state: dict) -> str:
 
 @client.tree.command(name="raetselevent", description="Startet ein mehrstufiges KI-Catnip-Rätsel-Event.")
 @app_commands.describe(
-    thema="Rätsel-Thema",
+    thema="Thema oder Stichwort für das Rätsel-Event",
     stationen="Anzahl der Stationen",
+    quelle="Feste Presets oder neue KI-Rätsel",
+    schwierigkeit="Schwierigkeitsgrad",
+    endboss="Optionaler Boss nach der letzten Station",
 )
 @app_commands.choices(
-    thema=[
-        app_commands.Choice(name="FFXIV Wissen", value="FFXIV Wissen"),
-        app_commands.Choice(name="Eorzea", value="Eorzea"),
-        app_commands.Choice(name="Event-Lore", value="Event-Lore"),
-    ]
+    quelle=[
+        app_commands.Choice(name="KI-generiert", value="ki"),
+        app_commands.Choice(name="Feste Presets", value="preset"),
+    ],
+    schwierigkeit=[
+        app_commands.Choice(name="Leicht", value="Leicht"),
+        app_commands.Choice(name="Mittel", value="Mittel"),
+        app_commands.Choice(name="Schwer", value="Schwer"),
+        app_commands.Choice(name="Extrem", value="Extrem"),
+    ],
+    endboss=[
+        app_commands.Choice(name="Kein Endboss", value="none"),
+        app_commands.Choice(name="Ifrit", value="Ifrit"),
+        app_commands.Choice(name="Titan", value="Titan"),
+        app_commands.Choice(name="Jupiter", value="Jupiter"),
+    ],
 )
 async def raetselevent(
     interaction: discord.Interaction,
-    thema: app_commands.Choice[str],
-    stationen: app_commands.Range[int, 1, 3] = 3,
+    thema: str,
+    stationen: app_commands.Range[int, 1, 5] = 3,
+    quelle: app_commands.Choice[str] | None = None,
+    schwierigkeit: app_commands.Choice[str] | None = None,
+    endboss: app_commands.Choice[str] | None = None,
 ):
     if not is_bot_admin(interaction.user.id):
         await interaction.response.send_message(
@@ -2397,7 +2589,10 @@ async def raetselevent(
         return
 
     if interaction.guild is None:
-        await interaction.response.send_message("Rätsel-Events funktionieren nur auf einem Server.", ephemeral=True)
+        await interaction.response.send_message(
+            "Rätsel-Events funktionieren nur auf einem Server.",
+            ephemeral=True,
+        )
         return
 
     key = _riddle_key(interaction.guild.id, interaction.channel_id)
@@ -2408,24 +2603,56 @@ async def raetselevent(
         )
         return
 
-    stations = [dict(s) for s in RIDDLE_PRESETS[thema.value][:stationen]]
+    source = quelle.value if quelle else "ki"
+    difficulty = schwierigkeit.value if schwierigkeit else "Mittel"
+    boss_name = endboss.value if endboss else "none"
+
+    await interaction.response.defer(thinking=True)
+
+    stations = None
+    used_source = "Preset"
+
+    if source == "ki":
+        stations = await generate_ai_riddle_stations(
+            interaction.channel_id,
+            interaction.user.display_name,
+            thema,
+            stationen,
+            difficulty,
+        )
+        if stations:
+            used_source = "KI-generiert"
+
+    if not stations:
+        stations = _fallback_riddle_stations(thema, min(stationen, 3))
+        used_source = "Preset-Fallback"
+
     state = {
-        "theme": thema.value,
+        "theme": thema,
         "stations": stations,
         "index": 0,
         "score": 0,
         "wrong": 0,
         "hints_used_current": 0,
         "solved_by": [],
+        "source": used_source,
+        "difficulty": difficulty,
+        "endboss": boss_name,
     }
     active_riddle_events[key] = state
 
-    await interaction.response.send_message(
+    boss_text = boss_name if boss_name != "none" else "Keiner"
+
+    await interaction.followup.send(
         embed=riddle_event_embed(
             state,
-            message=f"🧩 **{thema.value}** beginnt! Löst die Stationen gemeinsam.",
+            message=(
+                f"🧩 **{thema}** beginnt!\n"
+                f"Quelle: **{used_source}** • Schwierigkeit: **{difficulty}** • Endboss: **{boss_text}**"
+            ),
         )
     )
+
 
 @client.tree.command(name="raetselantwort", description="Beantwortet die aktuelle Station eines Rätsel-Events.")
 @app_commands.describe(lösung="Eure Lösung")
@@ -2451,6 +2678,8 @@ async def raetselantwort(interaction: discord.Interaction, lösung: str):
 
         final = state["index"] >= len(state["stations"]) - 1
         if final:
+            boss_name = state.get("endboss", "none")
+
             embed = discord.Embed(
                 title="🏆 Rätsel-Event abgeschlossen!",
                 description=(
@@ -2458,11 +2687,24 @@ async def raetselantwort(interaction: discord.Interaction, lösung: str):
                     f"🏆 **Endpunktzahl:** {state['score']}\n"
                     f"❌ **Fehlversuche:** {state['wrong']}\n"
                     f"🧠 **Letzte Lösung durch:** {interaction.user.display_name}\n\n"
-                    "KI-Catnip schnurrt anerkennend. Kein Runensiegel ist vor euch sicher. 🐱"
+                    + (
+                        f"⚔️ **Doch das letzte Siegel beginnt zu beben... {boss_name} wartet dahinter.**"
+                        if boss_name != "none"
+                        else "KI-Catnip schnurrt anerkennend. Kein Runensiegel ist vor euch sicher. 🐱"
+                    )
                 ),
             )
+
             active_riddle_events.pop(key, None)
             await interaction.response.send_message(embed=embed)
+
+            if boss_name != "none":
+                started = await _start_linked_endboss(interaction, boss_name)
+                if not started:
+                    await interaction.channel.send(
+                        "⚠️ Der konfigurierte Endboss konnte nicht automatisch gestartet werden. "
+                        "Prüfe, ob bereits ein Bosskampf läuft."
+                    )
             return
 
         state["index"] += 1
@@ -3425,7 +3667,7 @@ async def on_ready():
     print(f"✓ @Mention-Fragen: aktiv")
     print(f"✓ Catnip-Persönlichkeit: Stufe 3 aktiv")
     print(f"✓ Bosskämpfe: Stufe 4.3 aktiv (Heilung + K.O. + Wiederbelebung)")
-    print(f"✓ Rätsel-Events: Stufe 5.1 aktiv (/raetselevent, /raetselantwort, /raetselhinweis)")
+    print(f"✓ Rätsel-Events: Stufe 5.2 aktiv (KI-Rätsel + Preset-Fallback + Endboss)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
