@@ -2193,6 +2193,322 @@ async def botinfo(interaction: discord.Interaction):
 
 
 
+
+# ============================================================
+# STUFE 6.1 — DAUERHAFTE SPIELERPROFILE, PUNKTE, TITEL & RANGLISTE
+# ============================================================
+
+PROFILE_DATA_CHANNEL_NAME = os.getenv("PROFILE_DATA_CHANNEL_NAME", "ki-catnip-data")
+PROFILE_DATA_MESSAGE_PREFIX = "KI_CATNIP_PROFILE_DATA_V1:"
+player_profiles = {}
+
+TITLE_THRESHOLDS = [
+    (0, "Frischling von Eorzea"),
+    (100, "Abenteurer"),
+    (250, "Mechaniken-Versteher"),
+    (500, "Eorzea-Gelehrter"),
+    (1000, "Prüfungsbezwinger"),
+    (1750, "Ätherkenner"),
+    (2500, "Stand-in-AOE-Champion"),
+    (4000, "Held der Schattenflauscher"),
+    (6000, "Legende von Eorzea"),
+]
+
+
+def _profile_default(user_id: int, display_name: str = "Unbekannt"):
+    return {
+        "user_id": int(user_id),
+        "display_name": display_name,
+        "points": 0,
+        "events": 0,
+        "boss_wins": 0,
+        "riddles_solved": 0,
+        "selected_title": None,
+    }
+
+
+def _earned_titles(points: int):
+    return [title for threshold, title in TITLE_THRESHOLDS if points >= threshold]
+
+
+def _highest_title(points: int):
+    titles = _earned_titles(points)
+    return titles[-1] if titles else "Frischling von Eorzea"
+
+
+def _profile_title(profile: dict):
+    selected = profile.get("selected_title")
+    earned = _earned_titles(int(profile.get("points", 0)))
+    if selected in earned:
+        return selected
+    return _highest_title(int(profile.get("points", 0)))
+
+
+def _next_title_info(points: int):
+    for threshold, title in TITLE_THRESHOLDS:
+        if threshold > points:
+            return threshold, title
+    return None, None
+
+
+async def _get_or_create_profile_data_channel(guild: discord.Guild):
+    existing = discord.utils.get(guild.text_channels, name=PROFILE_DATA_CHANNEL_NAME)
+    if existing:
+        return existing
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+            manage_messages=True,
+        ),
+    }
+
+    # Event-Admins dürfen den Datenchannel nicht automatisch sehen.
+    channel = await guild.create_text_channel(
+        PROFILE_DATA_CHANNEL_NAME,
+        overwrites=overwrites,
+        reason="Persistente KI-Catnip-Spielerprofile",
+    )
+    return channel
+
+
+async def _find_profile_data_message(channel: discord.TextChannel):
+    async for message in channel.history(limit=50, oldest_first=True):
+        if message.author == channel.guild.me and message.content.startswith(PROFILE_DATA_MESSAGE_PREFIX):
+            return message
+    return None
+
+
+async def load_profiles_from_discord(guild: discord.Guild):
+    global player_profiles
+    try:
+        channel = await _get_or_create_profile_data_channel(guild)
+        message = await _find_profile_data_message(channel)
+
+        if not message:
+            player_profiles = {}
+            message = await channel.send(PROFILE_DATA_MESSAGE_PREFIX + "{}")
+            try:
+                await message.pin(reason="KI-Catnip Profildaten")
+            except Exception:
+                pass
+            print(f"✓ Profildaten initialisiert auf {guild.name}")
+            return
+
+        raw = message.content[len(PROFILE_DATA_MESSAGE_PREFIX):].strip()
+        data = json.loads(raw or "{}")
+        player_profiles = {
+            int(uid): profile for uid, profile in data.items()
+            if isinstance(profile, dict)
+        }
+        print(f"✓ {len(player_profiles)} Spielerprofile geladen")
+    except Exception as exc:
+        print(f"Profil-Ladefehler: {type(exc).__name__}: {exc}")
+
+
+async def save_profiles_to_discord(guild: discord.Guild):
+    try:
+        channel = await _get_or_create_profile_data_channel(guild)
+        message = await _find_profile_data_message(channel)
+
+        payload = json.dumps(
+            {str(uid): profile for uid, profile in player_profiles.items()},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        content = PROFILE_DATA_MESSAGE_PREFIX + payload
+
+        # Discord-Nachrichtenlimit: 2000 Zeichen.
+        if len(content) > 1950:
+            raise RuntimeError(
+                "Profildaten sind zu groß für die einfache Discord-Nachrichtenspeicherung. "
+                "Für größere Communities sollte Stufe 6 später auf SQLite/externen Speicher wechseln."
+            )
+
+        if message:
+            await message.edit(content=content)
+        else:
+            message = await channel.send(content)
+            try:
+                await message.pin(reason="KI-Catnip Profildaten")
+            except Exception:
+                pass
+    except Exception as exc:
+        print(f"Profil-Speicherfehler: {type(exc).__name__}: {exc}")
+        raise
+
+
+def get_or_create_profile(user):
+    profile = player_profiles.get(user.id)
+    if profile is None:
+        profile = _profile_default(user.id, user.display_name)
+        player_profiles[user.id] = profile
+    else:
+        profile["display_name"] = user.display_name
+    return profile
+
+
+def profile_embed(profile: dict) -> discord.Embed:
+    points = int(profile.get("points", 0))
+    title = _profile_title(profile)
+    next_threshold, next_title = _next_title_info(points)
+
+    embed = discord.Embed(
+        title=f"🏆 {profile.get('display_name', 'Abenteurer')} — Spielerprofil",
+        description=f"**Titel:** ✨ {title}",
+    )
+    embed.add_field(name="⭐ Punkte", value=f"**{points}**", inline=True)
+    embed.add_field(name="🎭 Events", value=f"**{profile.get('events', 0)}**", inline=True)
+    embed.add_field(name="⚔️ Boss-Siege", value=f"**{profile.get('boss_wins', 0)}**", inline=True)
+    embed.add_field(name="🧩 Rätsel gelöst", value=f"**{profile.get('riddles_solved', 0)}**", inline=True)
+
+    if next_threshold is not None:
+        remaining = max(0, next_threshold - points)
+        embed.add_field(
+            name="📈 Nächster Titel",
+            value=f"**{next_title}** bei {next_threshold} Punkten\nNoch **{remaining}** Punkte.",
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="🌟 Rang",
+            value="Du hast aktuell den höchsten verfügbaren KI-Catnip-Titel erreicht.",
+            inline=False,
+        )
+
+    embed.set_footer(text="Stufe 6.1 • Dauerhafte Profile über Discord gespeichert")
+    return embed
+
+
+@client.tree.command(name="profil", description="Zeigt dein dauerhaftes KI-Catnip-Spielerprofil.")
+@app_commands.describe(spieler="Optional: Profil eines anderen Spielers anzeigen")
+async def profil(
+    interaction: discord.Interaction,
+    spieler: discord.Member | None = None,
+):
+    target = spieler or interaction.user
+    profile = get_or_create_profile(target)
+    if interaction.guild:
+        await save_profiles_to_discord(interaction.guild)
+    await interaction.response.send_message(embed=profile_embed(profile))
+
+
+@client.tree.command(name="rangliste", description="Zeigt die KI-Catnip-Punkterangliste.")
+async def rangliste(interaction: discord.Interaction):
+    if not player_profiles:
+        await interaction.response.send_message(
+            "🏆 Noch gibt es keine Spielerprofile. Nutzt `/profil`, um eines anzulegen."
+        )
+        return
+
+    ranking = sorted(
+        player_profiles.values(),
+        key=lambda p: int(p.get("points", 0)),
+        reverse=True,
+    )[:10]
+
+    lines = []
+    medals = ["🥇", "🥈", "🥉"]
+    for i, profile in enumerate(ranking, start=1):
+        icon = medals[i - 1] if i <= 3 else f"`#{i}`"
+        title = _profile_title(profile)
+        lines.append(
+            f"{icon} **{profile.get('display_name', 'Unbekannt')}** — "
+            f"**{profile.get('points', 0)} Punkte** · *{title}*"
+        )
+
+    embed = discord.Embed(
+        title="🏆 KI-Catnip — Rangliste",
+        description="\n".join(lines),
+    )
+    embed.set_footer(text="Top 10 • Schattenflauscher")
+    await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(name="titel", description="Wählt einen deiner freigeschalteten KI-Catnip-Titel.")
+@app_commands.describe(titel="Exakter Name eines freigeschalteten Titels")
+async def titel(interaction: discord.Interaction, titel: str):
+    profile = get_or_create_profile(interaction.user)
+    earned = _earned_titles(int(profile.get("points", 0)))
+
+    wanted = titel.strip().lower()
+    selected = next((t for t in earned if t.lower() == wanted), None)
+
+    if not selected:
+        await interaction.response.send_message(
+            "🔒 Diesen Titel hast du noch nicht freigeschaltet.\n"
+            "Deine verfügbaren Titel:\n" + "\n".join(f"• {t}" for t in earned),
+            ephemeral=True,
+        )
+        return
+
+    profile["selected_title"] = selected
+    if interaction.guild:
+        await save_profiles_to_discord(interaction.guild)
+
+    await interaction.response.send_message(
+        f"✨ Dein aktiver Titel ist jetzt **{selected}**.",
+        ephemeral=True,
+    )
+
+
+@client.tree.command(name="titelinfo", description="Zeigt alle KI-Catnip-Titel und ihre Punktegrenzen.")
+async def titelinfo(interaction: discord.Interaction):
+    lines = [
+        f"**{threshold:>4} Punkte** — {title}"
+        for threshold, title in TITLE_THRESHOLDS
+    ]
+    await interaction.response.send_message(
+        "🏆 **KI-Catnip-Titel**\n" + "\n".join(lines),
+        ephemeral=True,
+    )
+
+
+@client.tree.command(name="punkte", description="Admin: Vergibt oder entfernt KI-Catnip-Punkte.")
+@app_commands.describe(
+    spieler="Spieler",
+    menge="Positive oder negative Punktzahl",
+    grund="Optionaler Grund",
+)
+async def punkte(
+    interaction: discord.Interaction,
+    spieler: discord.Member,
+    menge: app_commands.Range[int, -5000, 5000],
+    grund: str = "",
+):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Nur KI-Catnip-Administratoren dürfen Punkte verändern.",
+            ephemeral=True,
+        )
+        return
+
+    profile = get_or_create_profile(spieler)
+    old_points = int(profile.get("points", 0))
+    profile["points"] = max(0, old_points + menge)
+    new_points = profile["points"]
+
+    old_title = _highest_title(old_points)
+    new_title = _highest_title(new_points)
+
+    if interaction.guild:
+        await save_profiles_to_discord(interaction.guild)
+
+    text = (
+        f"🏆 **{spieler.display_name}**: {old_points} → **{new_points} Punkte**"
+        + (f"\nGrund: {grund}" if grund else "")
+    )
+
+    if new_title != old_title and new_points > old_points:
+        text += f"\n✨ **Neuer Titel freigeschaltet: {new_title}!**"
+
+    await interaction.response.send_message(text)
+
+
+
 # ============================================================
 # STUFE 5.1 — MEHRSTUFIGE RÄTSEL-EVENTS
 # ============================================================
@@ -3659,6 +3975,8 @@ async def catnip_info(interaction: discord.Interaction):
 @client.event
 async def on_ready():
     for guild in client.guilds:
+        await load_profiles_from_discord(guild)
+    for guild in client.guilds:
         await sync_event_admin_role(guild)
 
     print("=" * 56)
@@ -3668,6 +3986,7 @@ async def on_ready():
     print(f"✓ Catnip-Persönlichkeit: Stufe 3 aktiv")
     print(f"✓ Bosskämpfe: Stufe 4.3 aktiv (Heilung + K.O. + Wiederbelebung)")
     print(f"✓ Rätsel-Events: Stufe 5.2 aktiv (KI-Rätsel + Preset-Fallback + Endboss)")
+    print(f"✓ Spielerprofile: Stufe 6.1 aktiv (/profil, /rangliste, /titel, /punkte)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
