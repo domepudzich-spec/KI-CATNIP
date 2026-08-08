@@ -585,3 +585,4 @@ oberhalb von `KI-Catnip Event-Admin` stehen.
 Mit `/eventadmins` können freigeschaltete Event-Admins die aktuelle Whitelist
 prüfen. Nutzer, die noch nicht beigetreten sind, werden anhand ihrer ID als
 noch nicht auf dem Server angezeigt.
+Railway deployment
