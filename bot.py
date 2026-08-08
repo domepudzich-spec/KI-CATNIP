@@ -2193,65 +2193,141 @@ async def botinfo(interaction: discord.Interaction):
 
 
 # ============================================================
-# STUFE 4 — INTERAKTIVE BOSSKÄMPFE
+# STUFE 4.1 — INTERAKTIVE BOSSKÄMPFE MIT BUTTONS + PARTY-HP
 # ============================================================
 
 BOSS_TEMPLATES = {
     "Ifrit": {
         "max_hp": 100,
+        "party_hp": 100,
+        "wrong_damage": 25,
         "phases": [
-            ("Phase 1 — Glut", "Ifrit sammelt sengende Hitze. Welche Rolle sollte den Boss normalerweise frontal halten?", "tank"),
-            ("Phase 2 — Eruption", "Eine große AoE erscheint unter euch. Was ist die beste Reaktion?", "raus"),
-            ("Phase 3 — Inferno", "Der Boss bereitet starken Gruppenschaden vor. Welche Rolle hält die Gruppe besonders am Leben?", "heiler"),
+            {
+                "name": "Phase 1 — Glut",
+                "attack": "🔥 Höllenglut",
+                "question": "Ifrit richtet einen schweren Angriff auf sein Hauptziel. Welche Rolle sollte ihn normalerweise halten?",
+                "choices": [("A", "Tank"), ("B", "Heiler"), ("C", "Fernkampf-DPS"), ("D", "Crafter")],
+                "correct": "A",
+            },
+            {
+                "name": "Phase 2 — Eruption",
+                "attack": "💥 Eruption",
+                "question": "Unter euch erscheint eine große gefährliche Bodenfläche. Was ist die richtige Reaktion?",
+                "choices": [("A", "Stehen bleiben"), ("B", "Aus der AoE laufen"), ("C", "Zum Boss laufen"), ("D", "Emote benutzen")],
+                "correct": "B",
+            },
+            {
+                "name": "Phase 3 — Inferno",
+                "attack": "🌋 Inferno",
+                "question": "Die gesamte Gruppe erleidet hohen Schaden. Welche Rolle reagiert besonders mit Gruppenheilung?",
+                "choices": [("A", "Tank"), ("B", "Heiler"), ("C", "Melee-DPS"), ("D", "Gatherer")],
+                "correct": "B",
+            },
         ],
     },
     "Titan": {
         "max_hp": 120,
+        "party_hp": 100,
+        "wrong_damage": 25,
         "phases": [
-            ("Phase 1 — Gewicht des Landes", "Gefährliche Bodenflächen erscheinen. Was tut ihr?", "raus"),
-            ("Phase 2 — Bergsturz", "Titan richtet einen schweren Angriff auf sein Hauptziel. Welche Rolle sollte ihn halten?", "tank"),
-            ("Phase 3 — Erderschütterung", "Die ganze Gruppe erleidet Schaden. Wer reagiert besonders mit Gruppenheilung?", "heiler"),
+            {
+                "name": "Phase 1 — Gewicht des Landes",
+                "attack": "🟤 Gewicht des Landes",
+                "question": "Mehrere Bodenflächen erscheinen unter der Gruppe. Was hat Vorrang?",
+                "choices": [("A", "Ausweichen"), ("B", "Weitercasten"), ("C", "Zum Rand laufen"), ("D", "Limit Break")],
+                "correct": "A",
+            },
+            {
+                "name": "Phase 2 — Bergsturz",
+                "attack": "🪨 Bergsturz",
+                "question": "Titan setzt einen schweren Angriff auf sein Hauptziel ein. Wer sollte ihn abfangen?",
+                "choices": [("A", "Heiler"), ("B", "Tank"), ("C", "DPS"), ("D", "Alle gleichzeitig")],
+                "correct": "B",
+            },
+            {
+                "name": "Phase 3 — Erderschütterung",
+                "attack": "🌍 Erderschütterung",
+                "question": "Die ganze Gruppe verliert gleichzeitig HP. Was stabilisiert die Gruppe am schnellsten?",
+                "choices": [("A", "Gruppenheilung"), ("B", "Sprint"), ("C", "Provozieren"), ("D", "Auto-Attack")],
+                "correct": "A",
+            },
         ],
     },
     "Jupiter": {
-        "max_hp": 150,
+        "max_hp": 160,
+        "party_hp": 100,
+        "wrong_damage": 25,
         "phases": [
-            ("Phase 1 — Erwachen des Machtpatrons", "Jupiter markiert große Flächen der Arena. Was hat Vorrang?", "raus"),
-            ("Phase 2 — Herrschaft der Sterne", "Ein schwerer Einzelangriff trifft das Hauptziel. Welche Rolle fängt ihn ab?", "tank"),
-            ("Phase 3 — Jupiter, der Zerstörer", "Massiver Gruppenschaden steht bevor. Welche Rolle stabilisiert die Gruppe?", "heiler"),
-            ("Phase 4 — ENRAGE", "Letzte Chance: Was ist jetzt das wichtigste Ziel der Gruppe?", "schaden"),
+            {
+                "name": "PHASE 1 — Erwachen des Machtpatrons",
+                "attack": "🌌 Sternenbrand",
+                "question": "Jupiter markiert große Teile der Arena mit leuchtenden Flächen. Was ist die wichtigste Reaktion?",
+                "choices": [
+                    ("A", "In der Markierung stehen bleiben"),
+                    ("B", "Die gefährliche Fläche verlassen"),
+                    ("C", "Alle zum Tank laufen"),
+                    ("D", "Nur den Boss weiter angreifen"),
+                ],
+                "correct": "B",
+            },
+            {
+                "name": "PHASE 2 — Herrschaft der Sterne",
+                "attack": "☄️ Zwillingsklinge",
+                "question": "Jupiter setzt einen schweren Einzelangriff auf sein Hauptziel ein. Welche Rolle sollte diesen Angriff kontrolliert abfangen?",
+                "choices": [
+                    ("A", "Tank"),
+                    ("B", "Heiler"),
+                    ("C", "Fernkampf-DPS"),
+                    ("D", "Crafter"),
+                ],
+                "correct": "A",
+            },
+            {
+                "name": "PHASE 3 — Jupiter, der Zerstörer",
+                "attack": "⚡ Kosmische Entladung",
+                "question": "Eine starke raidweite Attacke steht bevor. Was hilft der Gruppe am meisten?",
+                "choices": [
+                    ("A", "Alle verteilen sich ohne Grund"),
+                    ("B", "Mitigation und Gruppenheilung vorbereiten"),
+                    ("C", "Tank dreht den Boss zur Gruppe"),
+                    ("D", "Alle stoppen ihre Aktionen"),
+                ],
+                "correct": "B",
+            },
+            {
+                "name": "PHASE 4 — ENRAGE",
+                "attack": "💀 Ende der Sterne",
+                "question": "Jupiter beginnt seinen finalen Enrage. Was ist jetzt das zentrale Ziel der Gruppe?",
+                "choices": [
+                    ("A", "So schnell wie möglich verbleibenden Schaden verursachen"),
+                    ("B", "Die Arena verlassen"),
+                    ("C", "Nur noch heilen"),
+                    ("D", "Den Boss nicht mehr angreifen"),
+                ],
+                "correct": "A",
+            },
         ],
     },
 }
 
 active_boss_battles = {}
 
+
 def _boss_key(guild_id: int, channel_id: int):
     return (guild_id, channel_id)
 
-def _normalize_boss_answer(value: str) -> str:
-    value = (value or "").strip().lower()
-    aliases = {
-        "tank": {"tank", "tanken", "verteidiger"},
-        "heiler": {"heiler", "heal", "healing", "heilen"},
-        "raus": {"raus", "ausweichen", "weg", "aoe verlassen", "laufen"},
-        "schaden": {"schaden", "dps", "damage", "angreifen", "burst"},
-    }
-    for canonical, words in aliases.items():
-        if value in words:
-            return canonical
-    return value
+
+def _hp_bar(current: int, maximum: int, bars: int = 10) -> str:
+    if maximum <= 0:
+        return "░" * bars
+    filled = round(max(0, min(current, maximum)) / maximum * bars)
+    return "█" * filled + "░" * (bars - filled)
+
 
 def boss_embed(state: dict, *, message: str | None = None) -> discord.Embed:
-    hp = max(0, state["hp"])
-    max_hp = state["max_hp"]
-    pct = int((hp / max_hp) * 100) if max_hp else 0
-    bars = 10
-    filled = max(0, min(bars, round((hp / max_hp) * bars))) if max_hp else 0
-    hpbar = "█" * filled + "░" * (bars - filled)
-
-    phase_index = min(state["phase"], len(state["phases"]) - 1)
-    phase_name, question, _answer = state["phases"][phase_index]
+    phase = state["phases"][state["phase"]]
+    boss_pct = round(state["hp"] / state["max_hp"] * 100) if state["max_hp"] else 0
+    party_pct = round(state["party_hp"] / state["party_max_hp"] * 100) if state["party_max_hp"] else 0
 
     embed = discord.Embed(
         title=f"⚔️ Bosskampf — {state['name']}",
@@ -2259,18 +2335,155 @@ def boss_embed(state: dict, *, message: str | None = None) -> discord.Embed:
     )
     embed.add_field(
         name="❤️ Boss-HP",
-        value=f"`{hp}/{max_hp}`  **{pct}%**\n`{hpbar}`",
+        value=(
+            f"`{state['hp']}/{state['max_hp']}`  **{boss_pct}%**\n"
+            f"`{_hp_bar(state['hp'], state['max_hp'])}`"
+        ),
         inline=False,
     )
-    embed.add_field(name="🔥 Aktuelle Phase", value=phase_name, inline=False)
-    embed.add_field(name="❓ Mechanik", value=question, inline=False)
     embed.add_field(
-        name="🎯 Antworten",
-        value="Benutzt `/bossantwort antwort:<eure Antwort>` gemeinsam im Channel.",
+        name="💚 Party-HP",
+        value=(
+            f"`{state['party_hp']}/{state['party_max_hp']}`  **{party_pct}%**\n"
+            f"`{_hp_bar(state['party_hp'], state['party_max_hp'])}`"
+        ),
         inline=False,
     )
-    embed.set_footer(text=f"Richtige Antworten: {state['correct']} • Fehler: {state['wrong']}")
+    embed.add_field(name="🔥 Aktuelle Phase", value=phase["name"], inline=False)
+    embed.add_field(name="⚡ Attacke", value=phase["attack"], inline=False)
+    embed.add_field(name="❓ Mechanik", value=phase["question"], inline=False)
+
+    options = "\n".join(f"**{key})** {label}" for key, label in phase["choices"])
+    embed.add_field(name="🎯 Auswahl", value=options, inline=False)
+    embed.set_footer(
+        text=(
+            f"Richtige Antworten: {state['correct']} • Fehler: {state['wrong']} "
+            f"• Fehler-Schaden: {state['wrong_damage']} Party-HP"
+        )
+    )
     return embed
+
+
+async def finish_boss_victory(interaction: discord.Interaction, key, state):
+    active_boss_battles.pop(key, None)
+    embed = discord.Embed(
+        title=f"🏆 VICTORY — {state['name']} besiegt!",
+        description=(
+            f"Die Gruppe hat **{state['correct']}** Mechaniken erfolgreich gelöst "
+            f"und **{state['wrong']}** Fehler gemacht.\n\n"
+            f"💚 Verbleibende Party-HP: **{state['party_hp']}/{state['party_max_hp']}**\n\n"
+            "KI-Catnip schnurrt zufrieden. Mögen eure nächsten AoEs genauso höflich ausweichen. 🐱"
+        ),
+    )
+    await interaction.response.edit_message(embed=embed, view=None)
+
+
+async def finish_boss_defeat(interaction: discord.Interaction, key, state):
+    active_boss_battles.pop(key, None)
+    embed = discord.Embed(
+        title=f"💀 DEFEAT — {state['name']}",
+        description=(
+            "Die Party-HP sind auf **0** gefallen.\n\n"
+            f"Richtige Antworten: **{state['correct']}** • Fehler: **{state['wrong']}**\n\n"
+            "Die Arena verstummt. Catnip notiert: Vielleicht beim nächsten Pull etwas weniger Boden tanken. 🐾"
+        ),
+    )
+    await interaction.response.edit_message(embed=embed, view=None)
+
+
+async def process_boss_choice(
+    interaction: discord.Interaction,
+    choice_key: str,
+):
+    if interaction.guild is None:
+        await interaction.response.send_message("Bosskämpfe funktionieren nur auf einem Server.", ephemeral=True)
+        return
+
+    key = _boss_key(interaction.guild.id, interaction.channel_id)
+    state = active_boss_battles.get(key)
+    if not state:
+        await interaction.response.send_message(
+            "🐾 Dieser Bosskampf ist bereits beendet oder wurde abgebrochen.",
+            ephemeral=True,
+        )
+        return
+
+    if interaction.user.id in state["answered_users"]:
+        await interaction.response.send_message(
+            "🐱 Du hast diese Mechanik bereits beantwortet. Jetzt sind die anderen Abenteurer dran.",
+            ephemeral=True,
+        )
+        return
+
+    phase = state["phases"][state["phase"]]
+    state["answered_users"].add(interaction.user.id)
+
+    if choice_key == phase["correct"]:
+        state["correct"] += 1
+        damage = max(1, state["max_hp"] // len(state["phases"]))
+        state["hp"] = max(0, state["hp"] - damage)
+
+        final_phase = state["phase"] >= len(state["phases"]) - 1
+        if final_phase or state["hp"] <= 0:
+            state["hp"] = 0
+            await finish_boss_victory(interaction, key, state)
+            return
+
+        state["phase"] += 1
+        state["answered_users"].clear()
+        await interaction.response.edit_message(
+            embed=boss_embed(
+                state,
+                message=(
+                    f"✅ **{interaction.user.display_name} löst die Mechanik!** "
+                    f"{state['name']} erleidet **{damage} Schaden**. "
+                    "Die nächste Phase beginnt!"
+                ),
+            ),
+            view=BossAnswerView(),
+        )
+        return
+
+    state["wrong"] += 1
+    state["party_hp"] = max(0, state["party_hp"] - state["wrong_damage"])
+
+    if state["party_hp"] <= 0:
+        await finish_boss_defeat(interaction, key, state)
+        return
+
+    await interaction.response.edit_message(
+        embed=boss_embed(
+            state,
+            message=(
+                f"💥 **{interaction.user.display_name} liegt daneben!** "
+                f"Die Party verliert **{state['wrong_damage']} HP**. "
+                "Die Mechanik bleibt aktiv – ein anderer Spieler kann sie noch lösen."
+            ),
+        ),
+        view=BossAnswerView(),
+    )
+
+
+class BossAnswerView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="A", emoji="🅰️", style=discord.ButtonStyle.primary)
+    async def answer_a(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await process_boss_choice(interaction, "A")
+
+    @discord.ui.button(label="B", emoji="🅱️", style=discord.ButtonStyle.primary)
+    async def answer_b(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await process_boss_choice(interaction, "B")
+
+    @discord.ui.button(label="C", emoji="🇨", style=discord.ButtonStyle.secondary)
+    async def answer_c(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await process_boss_choice(interaction, "C")
+
+    @discord.ui.button(label="D", emoji="🇩", style=discord.ButtonStyle.secondary)
+    async def answer_d(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await process_boss_choice(interaction, "D")
+
 
 @client.tree.command(name="bossstart", description="Startet einen interaktiven KI-Catnip-Bosskampf.")
 @app_commands.describe(boss="Boss auswählen")
@@ -2288,6 +2501,7 @@ async def bossstart(interaction: discord.Interaction, boss: app_commands.Choice[
             ephemeral=True,
         )
         return
+
     if interaction.guild is None:
         await interaction.response.send_message("Bosskämpfe funktionieren nur auf einem Server.", ephemeral=True)
         return
@@ -2301,35 +2515,57 @@ async def bossstart(interaction: discord.Interaction, boss: app_commands.Choice[
         return
 
     template = BOSS_TEMPLATES[boss.value]
-    active_boss_battles[key] = {
+    state = {
         "name": boss.value,
         "hp": template["max_hp"],
         "max_hp": template["max_hp"],
+        "party_hp": template["party_hp"],
+        "party_max_hp": template["party_hp"],
+        "wrong_damage": template["wrong_damage"],
         "phase": 0,
         "phases": template["phases"],
         "correct": 0,
         "wrong": 0,
         "answered_users": set(),
     }
-    state = active_boss_battles[key]
+    active_boss_battles[key] = state
+
     await interaction.response.send_message(
-        embed=boss_embed(state, message=f"⚔️ **{boss.value}** betritt die Arena! Mögen die AoEs woanders liegen.")
+        embed=boss_embed(
+            state,
+            message=f"⚔️ **{boss.value}** betritt die Arena! Die Antwortbuttons sind bereit.",
+        ),
+        view=BossAnswerView(),
     )
+
 
 @client.tree.command(name="bossstatus", description="Zeigt den aktuellen Bosskampf in diesem Channel.")
 async def bossstatus(interaction: discord.Interaction):
     if interaction.guild is None:
         await interaction.response.send_message("Bosskämpfe funktionieren nur auf einem Server.", ephemeral=True)
         return
+
     state = active_boss_battles.get(_boss_key(interaction.guild.id, interaction.channel_id))
     if not state:
         await interaction.response.send_message("🐾 In diesem Channel läuft gerade kein Bosskampf.", ephemeral=True)
         return
-    await interaction.response.send_message(embed=boss_embed(state))
 
-@client.tree.command(name="bossantwort", description="Beantwortet die aktuelle Mechanik eines Bosskampfs.")
-@app_commands.describe(antwort="Deine Antwort auf die aktuelle Mechanik")
+    await interaction.response.send_message(embed=boss_embed(state), ephemeral=True)
+
+
+@client.tree.command(name="bossantwort", description="Fallback: beantwortet die aktuelle Bossmechanik per A, B, C oder D.")
+@app_commands.describe(antwort="A, B, C oder D")
 async def bossantwort(interaction: discord.Interaction, antwort: str):
+    choice = (antwort or "").strip().upper()
+    if choice not in {"A", "B", "C", "D"}:
+        await interaction.response.send_message(
+            "Bitte antworte mit **A**, **B**, **C** oder **D**.",
+            ephemeral=True,
+        )
+        return
+
+    # Für Slash-Fallback wird die öffentliche Bossnachricht nicht editiert,
+    # sondern der aktuelle Stand als neue Nachricht ausgegeben.
     if interaction.guild is None:
         await interaction.response.send_message("Bosskämpfe funktionieren nur auf einem Server.", ephemeral=True)
         return
@@ -2342,49 +2578,54 @@ async def bossantwort(interaction: discord.Interaction, antwort: str):
 
     if interaction.user.id in state["answered_users"]:
         await interaction.response.send_message(
-            "🐱 Du hast diese Mechanik bereits beantwortet. Jetzt sind die anderen Abenteurer dran.",
+            "🐱 Du hast diese Mechanik bereits beantwortet.",
             ephemeral=True,
         )
         return
 
-    phase_name, _question, expected = state["phases"][state["phase"]]
-    given = _normalize_boss_answer(antwort)
+    phase = state["phases"][state["phase"]]
     state["answered_users"].add(interaction.user.id)
 
-    if given == expected:
+    if choice == phase["correct"]:
         state["correct"] += 1
         damage = max(1, state["max_hp"] // len(state["phases"]))
         state["hp"] = max(0, state["hp"] - damage)
 
-        if state["hp"] <= 0 or state["phase"] >= len(state["phases"]) - 1:
+        if state["phase"] >= len(state["phases"]) - 1 or state["hp"] <= 0:
             state["hp"] = 0
-            victory = discord.Embed(
-                title=f"🏆 VICTORY — {state['name']} besiegt!",
-                description=(
-                    f"Die Gruppe hat **{state['correct']}** Mechaniken richtig gelöst "
-                    f"und **{state['wrong']}** Fehler gemacht.\n\n"
-                    "Catnip schnurrt zufrieden. Die Arena gehört euch. 🐱"
-                ),
+            active_boss_battles.pop(key, None)
+            await interaction.response.send_message(
+                f"🏆 **VICTORY! {state['name']} wurde besiegt.** "
+                f"Party-HP: {state['party_hp']}/{state['party_max_hp']}"
             )
-            del active_boss_battles[key]
-            await interaction.response.send_message(embed=victory)
             return
 
         state["phase"] += 1
         state["answered_users"].clear()
         await interaction.response.send_message(
-            embed=boss_embed(
-                state,
-                message=f"✅ **Richtig!** {state['name']} erleidet schweren Schaden. Die nächste Phase beginnt!",
-            )
+            embed=boss_embed(state, message=f"✅ Richtig! {state['name']} erleidet **{damage} Schaden**."),
+            view=BossAnswerView(),
         )
         return
 
     state["wrong"] += 1
+    state["party_hp"] = max(0, state["party_hp"] - state["wrong_damage"])
+
+    if state["party_hp"] <= 0:
+        active_boss_battles.pop(key, None)
+        await interaction.response.send_message(
+            f"💀 **DEFEAT!** Die Party wurde von **{state['name']}** besiegt."
+        )
+        return
+
     await interaction.response.send_message(
-        f"💥 **Falsch!** `{antwort}` löst **{phase_name}** nicht. "
-        "Die Mechanik bleibt aktiv – ein anderer Spieler kann es versuchen."
+        embed=boss_embed(
+            state,
+            message=f"💥 Falsch! Die Party verliert **{state['wrong_damage']} HP**.",
+        ),
+        view=BossAnswerView(),
     )
+
 
 @client.tree.command(name="bossstop", description="Beendet den Bosskampf im aktuellen Channel.")
 async def bossstop(interaction: discord.Interaction):
@@ -2394,15 +2635,20 @@ async def bossstop(interaction: discord.Interaction):
             ephemeral=True,
         )
         return
+
     if interaction.guild is None:
         await interaction.response.send_message("Bosskämpfe funktionieren nur auf einem Server.", ephemeral=True)
         return
+
     key = _boss_key(interaction.guild.id, interaction.channel_id)
     state = active_boss_battles.pop(key, None)
     if not state:
         await interaction.response.send_message("🐾 Hier läuft kein Bosskampf.", ephemeral=True)
         return
-    await interaction.response.send_message(f"🛑 Der Bosskampf gegen **{state['name']}** wurde beendet.")
+
+    await interaction.response.send_message(
+        f"🛑 Der Bosskampf gegen **{state['name']}** wurde beendet."
+    )
 
 
 @client.tree.command(
@@ -2461,7 +2707,7 @@ async def on_ready():
     print(f"✓ Modell: {GEMINI_MODEL}")
     print(f"✓ @Mention-Fragen: aktiv")
     print(f"✓ Catnip-Persönlichkeit: Stufe 3 aktiv")
-    print(f"✓ Bosskämpfe: Stufe 4 aktiv (/bossstart, /bossantwort, /bossstatus, /bossstop)")
+    print(f"✓ Bosskämpfe: Stufe 4.1 aktiv (Buttons + Party-HP + Victory/Defeat)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
