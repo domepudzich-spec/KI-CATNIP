@@ -2215,6 +2215,66 @@ TITLE_THRESHOLDS = [
 ]
 
 
+# Automatische Belohnungen aus Stufe 6.2
+REWARD_RIDDLE_SOLVED = int(os.getenv("REWARD_RIDDLE_SOLVED", "25"))
+REWARD_RIDDLE_EVENT_COMPLETE = int(os.getenv("REWARD_RIDDLE_EVENT_COMPLETE", "75"))
+REWARD_BOSS_WIN = int(os.getenv("REWARD_BOSS_WIN", "150"))
+
+
+def _ensure_profile_for_user_id(user_id: int, display_name: str):
+    profile = player_profiles.get(user_id)
+    if profile is None:
+        profile = _profile_default(user_id, display_name)
+        player_profiles[user_id] = profile
+    else:
+        profile["display_name"] = display_name
+    return profile
+
+
+def _award_profile_points(
+    user_id: int,
+    display_name: str,
+    points: int,
+    *,
+    stat: str | None = None,
+    stat_amount: int = 1,
+):
+    """Vergibt Punkte/Statistiken und meldet ggf. einen neu freigeschalteten Titel."""
+    profile = _ensure_profile_for_user_id(user_id, display_name)
+
+    old_points = int(profile.get("points", 0))
+    old_highest = _highest_title(old_points)
+
+    profile["points"] = max(0, old_points + int(points))
+
+    if stat:
+        profile[stat] = int(profile.get(stat, 0)) + int(stat_amount)
+
+    new_points = int(profile["points"])
+    new_highest = _highest_title(new_points)
+
+    unlocked = new_highest if new_highest != old_highest and new_points > old_points else None
+
+    return {
+        "profile": profile,
+        "old_points": old_points,
+        "new_points": new_points,
+        "unlocked_title": unlocked,
+    }
+
+
+async def _persist_rewards(guild: discord.Guild | None):
+    if guild is not None:
+        await save_profiles_to_discord(guild)
+
+
+def _reward_line(display_name: str, result: dict, gained: int) -> str:
+    line = f"🏆 **{display_name}** erhält **+{gained} Punkte**"
+    if result.get("unlocked_title"):
+        line += f" — ✨ neuer Titel: **{result['unlocked_title']}**"
+    return line
+
+
 def _profile_default(user_id: int, display_name: str = "Unbekannt"):
     return {
         "user_id": int(user_id),
@@ -2379,7 +2439,7 @@ def profile_embed(profile: dict) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Stufe 6.1 • Dauerhafte Profile über Discord gespeichert")
+    embed.set_footer(text="Stufe 6.2 • Punkte aus Rätseln & Bosskämpfen automatisch gespeichert")
     return embed
 
 
@@ -2465,6 +2525,36 @@ async def titelinfo(interaction: discord.Interaction):
         "🏆 **KI-Catnip-Titel**\n" + "\n".join(lines),
         ephemeral=True,
     )
+
+
+
+@client.tree.command(name="belohnungen", description="Zeigt die automatischen KI-Catnip-Punktebelohnungen.")
+async def belohnungen(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🏆 KI-Catnip — Automatische Belohnungen",
+        description="Punkte werden bei euren Events automatisch ins Spielerprofil geschrieben.",
+    )
+    embed.add_field(
+        name="🧩 Rätsel lösen",
+        value=f"**+{REWARD_RIDDLE_SOLVED} Punkte** pro korrekt gelöster Station",
+        inline=False,
+    )
+    embed.add_field(
+        name="🏁 Rätsel-Event abschließen",
+        value=f"**+{REWARD_RIDDLE_EVENT_COMPLETE} Punkte** für beteiligte Löser",
+        inline=False,
+    )
+    embed.add_field(
+        name="⚔️ Boss besiegen",
+        value=f"**+{REWARD_BOSS_WIN} Punkte** für jedes angemeldete Gruppenmitglied",
+        inline=False,
+    )
+    embed.add_field(
+        name="✨ Titel",
+        value="Neue Titel werden beim Überschreiten ihrer Punktegrenze automatisch freigeschaltet.",
+        inline=False,
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @client.tree.command(name="punkte", description="Admin: Vergibt oder entfernt KI-Catnip-Punkte.")
@@ -2951,6 +3041,7 @@ async def raetselevent(
         "wrong": 0,
         "hints_used_current": 0,
         "solved_by": [],
+        "solver_ids": {},
         "source": used_source,
         "difficulty": difficulty,
         "endboss": boss_name,
@@ -2991,10 +3082,37 @@ async def raetselantwort(interaction: discord.Interaction, lösung: str):
         gained = max(10, 100 - state["hints_used_current"] * 25)
         state["score"] += gained
         state["solved_by"].append(interaction.user.display_name)
+        state.setdefault("solver_ids", {})[str(interaction.user.id)] = interaction.user.display_name
+
+        # Stufe 6.2: dauerhafte Spielerbelohnung für jede gelöste Station.
+        riddle_reward = _award_profile_points(
+            interaction.user.id,
+            interaction.user.display_name,
+            REWARD_RIDDLE_SOLVED,
+            stat="riddles_solved",
+        )
+        await _persist_rewards(interaction.guild)
 
         final = state["index"] >= len(state["stations"]) - 1
         if final:
             boss_name = state.get("endboss", "none")
+
+            # Stufe 6.2: Abschlussbonus an jeden Spieler, der mindestens
+            # eine Station dieses Events gelöst hat.
+            event_reward_lines = []
+            for uid_text, display_name in state.get("solver_ids", {}).items():
+                uid = int(uid_text)
+                result = _award_profile_points(
+                    uid,
+                    display_name,
+                    REWARD_RIDDLE_EVENT_COMPLETE,
+                    stat="events",
+                )
+                event_reward_lines.append(
+                    _reward_line(display_name, result, REWARD_RIDDLE_EVENT_COMPLETE)
+                )
+
+            await _persist_rewards(interaction.guild)
 
             embed = discord.Embed(
                 title="🏆 Rätsel-Event abgeschlossen!",
@@ -3007,6 +3125,10 @@ async def raetselantwort(interaction: discord.Interaction, lösung: str):
                         f"⚔️ **Doch das letzte Siegel beginnt zu beben... {boss_name} wartet dahinter.**"
                         if boss_name != "none"
                         else "KI-Catnip schnurrt anerkennend. Kein Runensiegel ist vor euch sicher. 🐱"
+                    )
+                    + (
+                        "\n\n**🏆 Profil-Belohnungen**\n" + "\n".join(event_reward_lines)
+                        if event_reward_lines else ""
                     )
                 ),
             )
@@ -3030,7 +3152,8 @@ async def raetselantwort(interaction: discord.Interaction, lösung: str):
                 state,
                 message=(
                     f"✅ **Richtig!** {interaction.user.display_name} löst die Station "
-                    f"und verdient **{gained} Punkte**. Die nächste Pforte öffnet sich."
+                    f"und verdient **{gained} Event-Punkte**. Die nächste Pforte öffnet sich.\n"
+                    + _reward_line(interaction.user.display_name, riddle_reward, REWARD_RIDDLE_SOLVED)
                 ),
             )
         )
@@ -3444,6 +3567,35 @@ def boss_embed(state: dict, *, message: str | None = None) -> discord.Embed:
 
 async def finish_boss_victory(interaction: discord.Interaction, key, state):
     active_boss_battles.pop(key, None)
+
+    reward_lines = []
+    players = state.get("players", {})
+
+    if players:
+        for uid, player in players.items():
+            result = _award_profile_points(
+                int(uid),
+                player["name"],
+                REWARD_BOSS_WIN,
+                stat="boss_wins",
+            )
+            reward_lines.append(
+                _reward_line(player["name"], result, REWARD_BOSS_WIN)
+            )
+    else:
+        # Fallback für Tests/Kämpfe ohne /bossgruppe:
+        result = _award_profile_points(
+            interaction.user.id,
+            interaction.user.display_name,
+            REWARD_BOSS_WIN,
+            stat="boss_wins",
+        )
+        reward_lines.append(
+            _reward_line(interaction.user.display_name, result, REWARD_BOSS_WIN)
+        )
+
+    await _persist_rewards(interaction.guild)
+
     embed = discord.Embed(
         title=f"🏆 VICTORY — {state['name']} besiegt!",
         description=(
@@ -3451,6 +3603,7 @@ async def finish_boss_victory(interaction: discord.Interaction, key, state):
             f"und **{state['wrong']}** Fehler gemacht.\n\n"
             f"💚 Verbleibende Party-HP: **{state['party_hp']}/{state['party_max_hp']}**\n\n"
             "KI-Catnip schnurrt zufrieden. Mögen eure nächsten AoEs genauso höflich ausweichen. 🐱"
+            + ("\n\n**🏆 Profil-Belohnungen**\n" + "\n".join(reward_lines) if reward_lines else "")
         ),
     )
     await interaction.response.edit_message(embed=embed, view=None)
@@ -3835,9 +3988,38 @@ async def bossantwort(interaction: discord.Interaction, antwort: str):
         if state["phase"] >= len(state["phases"]) - 1 or state["hp"] <= 0:
             state["hp"] = 0
             active_boss_battles.pop(key, None)
+
+            reward_lines = []
+            players = state.get("players", {})
+            if players:
+                for uid, player in players.items():
+                    result = _award_profile_points(
+                        int(uid),
+                        player["name"],
+                        REWARD_BOSS_WIN,
+                        stat="boss_wins",
+                    )
+                    reward_lines.append(
+                        _reward_line(player["name"], result, REWARD_BOSS_WIN)
+                    )
+            else:
+                result = _award_profile_points(
+                    interaction.user.id,
+                    interaction.user.display_name,
+                    REWARD_BOSS_WIN,
+                    stat="boss_wins",
+                )
+                reward_lines.append(
+                    _reward_line(interaction.user.display_name, result, REWARD_BOSS_WIN)
+                )
+
+            await _persist_rewards(interaction.guild)
+
             await interaction.response.send_message(
                 f"🏆 **VICTORY! {state['name']} wurde besiegt.** "
-                f"Party-HP: {state['party_hp']}/{state['party_max_hp']}"
+                f"Party-HP: {state['party_hp']}/{state['party_max_hp']}\n\n"
+                + "**🏆 Profil-Belohnungen**\n"
+                + "\n".join(reward_lines)
             )
             return
 
@@ -3986,7 +4168,7 @@ async def on_ready():
     print(f"✓ Catnip-Persönlichkeit: Stufe 3 aktiv")
     print(f"✓ Bosskämpfe: Stufe 4.3 aktiv (Heilung + K.O. + Wiederbelebung)")
     print(f"✓ Rätsel-Events: Stufe 5.2 aktiv (KI-Rätsel + Preset-Fallback + Endboss)")
-    print(f"✓ Spielerprofile: Stufe 6.1 aktiv (/profil, /rangliste, /titel, /punkte)")
+    print(f"✓ Spielerprofile: Stufe 6.2 aktiv (Auto-Rewards + Titel + Rangliste)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
