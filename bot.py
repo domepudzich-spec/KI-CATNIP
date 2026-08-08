@@ -2195,6 +2195,307 @@ async def botinfo(interaction: discord.Interaction):
 
 
 
+
+# ============================================================
+# STUFE 7.2 — RP-SPIELLEITER & PERSÖNLICHE QUESTS
+# ============================================================
+
+async def _character_context_for_member(guild: discord.Guild, member: discord.Member):
+    data = await load_character_profile(guild, member.id)
+    if not data:
+        return None
+
+    return (
+        f"Charaktername: {data.get('charname', 'Unbekannt')}\n"
+        f"Volk: {data.get('volk', 'Nicht angegeben')}\n"
+        f"Geschlecht/Identität: {data.get('geschlecht', 'Nicht angegeben')}\n"
+        f"Hauptjob: {data.get('hauptjob', 'Nicht angegeben')}\n"
+        f"Herkunft: {data.get('herkunft', 'Nicht angegeben')}\n"
+        f"Persönlichkeit: {data.get('persoenlichkeit', 'Nicht angegeben')}\n"
+        f"Hintergrund: {data.get('hintergrund', 'Nicht angegeben')}"
+    )
+
+
+RP_RULES = """
+RP-REGELN FÜR KI-CATNIP
+- Nutze das gespeicherte Charakterprofil als Grundlage.
+- Du steuerst NIEMALS ungefragt den Spielercharakter.
+- Lege dem Spielercharakter keine Worte, Gefühle, Entscheidungen oder Handlungen in den Mund.
+- Beschreibe nur Welt, NPCs, Umgebung, Gefahren, Hinweise und Konsequenzen auf bestätigte Spieleraktionen.
+- Beende Szenen möglichst mit einer offenen Situation oder klaren Entscheidungsmöglichkeit.
+- Bei Gruppenszenen alle Charaktere fair berücksichtigen.
+- Offizielle FFXIV-Lore und frei erfundene Event-/RP-Lore klar trennen.
+- Persönliche Hintergrundgeschichten des Nutzers nicht als offizielle FFXIV-Lore darstellen.
+- Den persönlichen Spoilerstand weiterhin strikt beachten.
+- Keine sexualisierten oder unangemessen intimen Inhalte erzeugen.
+""".strip()
+
+
+@client.tree.command(
+    name="rp",
+    description="Startet eine persönliche RP-Szene mit deinem gespeicherten FFXIV-Charakter."
+)
+@app_commands.describe(
+    szene="Wunschszene, Ort oder Ausgangssituation",
+    stil="Optional: Stimmung oder Stil"
+)
+async def rp(
+    interaction: discord.Interaction,
+    szene: str,
+    stil: str = "",
+):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "RP-Szenen funktionieren nur auf einem Discord-Server.",
+            ephemeral=True,
+        )
+        return
+
+    context = await _character_context_for_member(interaction.guild, interaction.user)
+    if not context:
+        await interaction.response.send_message(
+            "📜 Du brauchst zuerst ein Charakterprofil. "
+            "Nutze `/charaktererstellen`.",
+            ephemeral=True,
+        )
+        return
+
+    prompt = f"""
+{RP_RULES}
+
+GESPEICHERTES CHARAKTERPROFIL
+{context}
+
+GEWÜNSCHTE SZENE
+{szene}
+
+STIL
+{stil or 'Atmosphärisch, FFXIV-inspiriert, kompakt'}
+
+Aufgabe:
+- Eröffne eine spielbare RP-Szene.
+- 2 bis 4 Absätze.
+- Nutze mindestens ein konkretes Umgebungsdetail.
+- Optional 1 bis 2 NPCs.
+- Beende mit einer offenen Situation oder Frage an den Spieler.
+- Keine Entscheidung für den Spielercharakter treffen.
+""".strip()
+
+    await send_interaction(
+        interaction,
+        prompt,
+        remember=True,
+    )
+
+
+@client.tree.command(
+    name="rpquest",
+    description="Erstellt eine persönliche kleine RP-Quest für deinen FFXIV-Charakter."
+)
+@app_commands.describe(
+    thema="Thema oder Aufhänger",
+    dauer="Gewünschte Länge",
+    schwierigkeit="Schwierigkeitsgrad"
+)
+@app_commands.choices(
+    dauer=[
+        app_commands.Choice(name="Kurz", value="Kurz"),
+        app_commands.Choice(name="Mittel", value="Mittel"),
+        app_commands.Choice(name="Lang", value="Lang"),
+    ],
+    schwierigkeit=[
+        app_commands.Choice(name="Leicht", value="Leicht"),
+        app_commands.Choice(name="Mittel", value="Mittel"),
+        app_commands.Choice(name="Schwer", value="Schwer"),
+    ]
+)
+async def rpquest(
+    interaction: discord.Interaction,
+    thema: str,
+    dauer: app_commands.Choice[str] | None = None,
+    schwierigkeit: app_commands.Choice[str] | None = None,
+):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "RP-Quests funktionieren nur auf einem Discord-Server.",
+            ephemeral=True,
+        )
+        return
+
+    context = await _character_context_for_member(interaction.guild, interaction.user)
+    if not context:
+        await interaction.response.send_message(
+            "📜 Du brauchst zuerst ein Charakterprofil. "
+            "Nutze `/charaktererstellen`.",
+            ephemeral=True,
+        )
+        return
+
+    duration = dauer.value if dauer else "Mittel"
+    difficulty = schwierigkeit.value if schwierigkeit else "Mittel"
+
+    prompt = f"""
+{RP_RULES}
+
+GESPEICHERTES CHARAKTERPROFIL
+{context}
+
+QUEST-THEMA
+{thema}
+
+LÄNGE
+{duration}
+
+SCHWIERIGKEIT
+{difficulty}
+
+Erstelle eine persönliche FFXIV-inspirierte RP-Quest mit:
+1. Questtitel
+2. kurzer Aufhänger
+3. Auftraggeber oder Auslöser
+4. Ziel
+5. 2 bis 4 Stationen
+6. mindestens einer Entscheidung
+7. optionalem Rätsel oder Kampfaufhänger
+8. möglicher Belohnung
+9. Spielleiterhinweis
+
+WICHTIG:
+- Nicht automatisch ausspielen, sondern als spielbare Queststruktur liefern.
+- Spielercharakter nicht fremdsteuern.
+- Erfundene Inhalte als **Event-/RP-Lore** kennzeichnen.
+""".strip()
+
+    await send_interaction(
+        interaction,
+        prompt,
+        remember=False,
+    )
+
+
+@client.tree.command(
+    name="rpgruppe",
+    description="Erstellt eine RP-Szene mit mehreren gespeicherten KI-Catnip-Charakteren."
+)
+@app_commands.describe(
+    spieler2="Zweiter Spieler",
+    spieler3="Optional: dritter Spieler",
+    spieler4="Optional: vierter Spieler",
+    szene="Gemeinsame Ausgangssituation"
+)
+async def rpgruppe(
+    interaction: discord.Interaction,
+    spieler2: discord.Member,
+    szene: str,
+    spieler3: discord.Member | None = None,
+    spieler4: discord.Member | None = None,
+):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "RP-Gruppenszenen funktionieren nur auf einem Discord-Server.",
+            ephemeral=True,
+        )
+        return
+
+    members = [interaction.user, spieler2]
+    if spieler3:
+        members.append(spieler3)
+    if spieler4:
+        members.append(spieler4)
+
+    seen = set()
+    unique_members = []
+    for member in members:
+        if member.id not in seen:
+            seen.add(member.id)
+            unique_members.append(member)
+
+    contexts = []
+    missing = []
+
+    for member in unique_members:
+        ctx = await _character_context_for_member(interaction.guild, member)
+        if ctx:
+            contexts.append(
+                f"--- {member.display_name} ---\n{ctx}"
+            )
+        else:
+            missing.append(member.display_name)
+
+    if missing:
+        await interaction.response.send_message(
+            "📜 Für folgende Spieler fehlt noch ein Charakterprofil:\n"
+            + "\n".join(f"• {name}" for name in missing),
+            ephemeral=True,
+        )
+        return
+
+    prompt = f"""
+{RP_RULES}
+
+GRUPPENCHARAKTERE
+{chr(10).join(contexts)}
+
+GEMEINSAME SZENE
+{szene}
+
+Aufgabe:
+- Eröffne eine gemeinsame RP-Szene für diese Charaktere.
+- Beschreibe Welt, NPCs und Ausgangslage.
+- Beziehe die Profile sichtbar, aber nicht aufdringlich ein.
+- Kein Charakter wird von dir gesteuert.
+- Jeder Spieler soll eine sinnvolle Möglichkeit zum Reagieren haben.
+- 3 bis 5 Absätze.
+- Beende mit einer offenen Gruppensituation.
+""".strip()
+
+    await send_interaction(
+        interaction,
+        prompt,
+        remember=True,
+    )
+
+
+@client.tree.command(
+    name="rphilfe",
+    description="Zeigt die KI-Catnip-RP-Funktionen."
+)
+async def rphilfe(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📜 KI-Catnip — RP-Spielleiter",
+        description=(
+            "KI-Catnip kann eure gespeicherten FFXIV-Charakterprofile "
+            "für persönliche und gemeinsame RP-Szenen verwenden."
+        ),
+    )
+    embed.add_field(
+        name="🎭 /rp",
+        value="Startet eine persönliche, offene RP-Szene.",
+        inline=False,
+    )
+    embed.add_field(
+        name="📖 /rpquest",
+        value="Erstellt eine kleine persönliche Queststruktur.",
+        inline=False,
+    )
+    embed.add_field(
+        name="👥 /rpgruppe",
+        value="Eröffnet eine Szene mit 2 bis 4 gespeicherten Charakteren.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🛡️ Spielerautonomie",
+        value=(
+            "Catnip beschreibt Welt und NPCs, entscheidet aber nicht ungefragt, "
+            "was dein Charakter sagt, fühlt oder tut."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Stufe 7.2 • RP-Spielleiter")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+
 # ============================================================
 # STUFE 7.1 — DAUERHAFTE FFXIV-CHARAKTERPROFILE
 # ============================================================
@@ -2300,8 +2601,13 @@ def character_profile_embed(data: dict, owner_name: str) -> discord.Embed:
         value=data.get("hintergrund") or "Nicht angegeben",
         inline=False,
     )
+    embed.add_field(
+        name="🎭 RP verwenden",
+        value="`/rp` · `/rpquest` · `/rpgruppe`",
+        inline=False,
+    )
     embed.set_footer(
-        text="KI-Catnip • Charakterprofil Stufe 7.1"
+        text="KI-Catnip • Charakterprofil Stufe 7.2"
     )
     return embed
 
@@ -4514,6 +4820,7 @@ async def on_ready():
     print(f"✓ Rätsel-Events: Stufe 5.2 aktiv (KI-Rätsel + Preset-Fallback + Endboss)")
     print(f"✓ Spielerprofile: Stufe 6.2 aktiv (Auto-Rewards + Titel + Rangliste)")
     print(f"✓ Charakterprofile: Stufe 7.1 aktiv (/charaktererstellen, /charakterprofil, /charakterbearbeiten)")
+    print(f"✓ RP-Spielleiter: Stufe 7.2 aktiv (/rp, /rpquest, /rpgruppe)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
