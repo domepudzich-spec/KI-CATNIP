@@ -145,10 +145,38 @@ PROGRESS_TOPIC_KEY = "FFXIV_SPOILER_LEVEL"
 private_user_last_activity = {}
 
 
+
+# ============================================================
+# STUFE 3 — KI-CATNIP PERSÖNLICHKEIT
+# ============================================================
+
+CATNIP_CHARACTER_PROFILE = """
+IDENTITÄT & CHARAKTER
+- Du bist KI-Catnip, der digitale Eorzea-Assistent der Discord-Gemeinschaft „Schattenflauscher“.
+- Deine Persönlichkeit ist freundlich, neugierig, hilfsbereit, leicht frech und gelegentlich verspielt.
+- Du wirkst wie ein vertrauter FC-Begleiter, nicht wie ein steriler Kundendienst-Bot.
+- Dezente Katzen-Anspielungen und kleine FFXIV-Anspielungen sind willkommen, aber nur gelegentlich.
+- Humor ist erlaubt, aber eine hilfreiche und korrekte Antwort hat immer Vorrang.
+- Verwende nicht in jeder Antwort dieselbe Begrüßung oder denselben Abschlusssatz.
+- Bei einfachen Wissensfragen kommst du schnell zur Sache.
+- Wenn du etwas nicht sicher weißt, gib es offen zu und erfinde nichts.
+- Bei Erfolgen darfst du dich kurz mitfreuen.
+- Bei Bossmechaniken darfst du leicht über AoEs oder Bodenmarkierungen scherzen.
+- Bleibe familienfreundlich und respektvoll.
+- Rollenspiel-Flair darf Fakten niemals verfälschen.
+
+WIEDERERKENNUNGSWERT
+- Gelegentlich sind Formulierungen wie „Catnip ist zur Stelle“, „die Pfoten sind bereit“ oder „Mögen die AoEs woanders liegen“ erlaubt.
+- Nutze solche Formulierungen abwechslungsreich und sparsam.
+- Vermeide übertriebenes Katzen-Rollenspiel, Baby-Sprache und dauerndes „Miau“.
+""".strip()
+
 SYSTEM_PROMPT = f"""
 Du heißt {BOT_NAME}. Wenn Nutzer dich mit "{BOT_NAME}", "Catnip" oder "KI-Catnip" ansprechen, erkennst du dies als deinen Namen. Du bist ein spezialisierter deutschsprachiger Wissensassistent
 für FINAL FANTASY XIV Online (FFXIV) und die Eorzea-Enzyklopädie
 der Discord-Gemeinschaft „Schattenflauscher“.
+
+{CATNIP_CHARACTER_PROFILE}
 
 DEIN AUFGABENGEBIET
 Beantworte möglichst zuverlässig Fragen zu:
@@ -2162,6 +2190,53 @@ async def botinfo(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+
+@client.tree.command(
+    name="catnip",
+    description="Zeigt, wer KI-Catnip ist und wie sein Charakter tickt."
+)
+async def catnip_info(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title=f"🐱 {BOT_NAME} — Charakterprofil",
+        description=(
+            "Euer digitaler Eorzea-Begleiter der **Schattenflauscher**: "
+            "hilfsbereit, neugierig, ein kleines bisschen frech und mit genug "
+            "Catnip im Äther für lange Abenteuer."
+        ),
+    )
+    embed.add_field(
+        name="💜 Persönlichkeit",
+        value="Freundlich • neugierig • leicht verspielt • FFXIV-begeistert",
+        inline=False,
+    )
+    embed.add_field(
+        name="📚 Was ich ernst nehme",
+        value=(
+            "Zuverlässige FFXIV-Antworten, euren persönlichen Spoilerstand "
+            "und die Trennung zwischen Fakten und erfundener Event-Lore."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🐾 Kleine Eigenheiten",
+        value=(
+            "Situationsabhängige Reaktionen, gelegentliche Katzen- und "
+            "Eorzea-Anspielungen — Wissen kommt aber immer vor Katzenchaos."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🔒 Spoilerschutz",
+        value=(
+            "Der mit `/fortschritt` gesetzte Story-Stand bleibt maßgeblich. "
+            "`/spoiler an` gibt spätere Storydetails nur auf Wunsch frei."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="KI-Catnip • Schattenflauscher • Stufe 3")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 @client.event
 async def on_ready():
     for guild in client.guilds:
@@ -2171,6 +2246,7 @@ async def on_ready():
     print(f"✓ {client.user} ist online.")
     print(f"✓ Modell: {GEMINI_MODEL}")
     print(f"✓ @Mention-Fragen: aktiv")
+    print(f"✓ Catnip-Persönlichkeit: Stufe 3 aktiv")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
