@@ -2205,6 +2205,7 @@ BOSS_TEMPLATES = {
             {
                 "name": "Phase 1 — Glut",
                 "attack": "🔥 Höllenglut",
+                "mechanic_type": "tankbuster",
                 "question": "Ifrit richtet einen schweren Angriff auf sein Hauptziel. Welche Rolle sollte ihn normalerweise halten?",
                 "choices": [("A", "Tank"), ("B", "Heiler"), ("C", "Fernkampf-DPS"), ("D", "Crafter")],
                 "correct": "A",
@@ -2212,6 +2213,7 @@ BOSS_TEMPLATES = {
             {
                 "name": "Phase 2 — Eruption",
                 "attack": "💥 Eruption",
+                "mechanic_type": "aoe",
                 "question": "Unter euch erscheint eine große gefährliche Bodenfläche. Was ist die richtige Reaktion?",
                 "choices": [("A", "Stehen bleiben"), ("B", "Aus der AoE laufen"), ("C", "Zum Boss laufen"), ("D", "Emote benutzen")],
                 "correct": "B",
@@ -2219,6 +2221,7 @@ BOSS_TEMPLATES = {
             {
                 "name": "Phase 3 — Inferno",
                 "attack": "🌋 Inferno",
+                "mechanic_type": "raidwide",
                 "question": "Die gesamte Gruppe erleidet hohen Schaden. Welche Rolle reagiert besonders mit Gruppenheilung?",
                 "choices": [("A", "Tank"), ("B", "Heiler"), ("C", "Melee-DPS"), ("D", "Gatherer")],
                 "correct": "B",
@@ -2233,6 +2236,7 @@ BOSS_TEMPLATES = {
             {
                 "name": "Phase 1 — Gewicht des Landes",
                 "attack": "🟤 Gewicht des Landes",
+                "mechanic_type": "aoe",
                 "question": "Mehrere Bodenflächen erscheinen unter der Gruppe. Was hat Vorrang?",
                 "choices": [("A", "Ausweichen"), ("B", "Weitercasten"), ("C", "Zum Rand laufen"), ("D", "Limit Break")],
                 "correct": "A",
@@ -2240,6 +2244,7 @@ BOSS_TEMPLATES = {
             {
                 "name": "Phase 2 — Bergsturz",
                 "attack": "🪨 Bergsturz",
+                "mechanic_type": "tankbuster",
                 "question": "Titan setzt einen schweren Angriff auf sein Hauptziel ein. Wer sollte ihn abfangen?",
                 "choices": [("A", "Heiler"), ("B", "Tank"), ("C", "DPS"), ("D", "Alle gleichzeitig")],
                 "correct": "B",
@@ -2247,6 +2252,7 @@ BOSS_TEMPLATES = {
             {
                 "name": "Phase 3 — Erderschütterung",
                 "attack": "🌍 Erderschütterung",
+                "mechanic_type": "raidwide",
                 "question": "Die ganze Gruppe verliert gleichzeitig HP. Was stabilisiert die Gruppe am schnellsten?",
                 "choices": [("A", "Gruppenheilung"), ("B", "Sprint"), ("C", "Provozieren"), ("D", "Auto-Attack")],
                 "correct": "A",
@@ -2261,6 +2267,7 @@ BOSS_TEMPLATES = {
             {
                 "name": "PHASE 1 — Erwachen des Machtpatrons",
                 "attack": "🌌 Sternenbrand",
+                "mechanic_type": "aoe",
                 "question": "Jupiter markiert große Teile der Arena mit leuchtenden Flächen. Was ist die wichtigste Reaktion?",
                 "choices": [
                     ("A", "In der Markierung stehen bleiben"),
@@ -2273,6 +2280,7 @@ BOSS_TEMPLATES = {
             {
                 "name": "PHASE 2 — Herrschaft der Sterne",
                 "attack": "☄️ Zwillingsklinge",
+                "mechanic_type": "tankbuster",
                 "question": "Jupiter setzt einen schweren Einzelangriff auf sein Hauptziel ein. Welche Rolle sollte diesen Angriff kontrolliert abfangen?",
                 "choices": [
                     ("A", "Tank"),
@@ -2285,6 +2293,7 @@ BOSS_TEMPLATES = {
             {
                 "name": "PHASE 3 — Jupiter, der Zerstörer",
                 "attack": "⚡ Kosmische Entladung",
+                "mechanic_type": "raidwide",
                 "question": "Eine starke raidweite Attacke steht bevor. Was hilft der Gruppe am meisten?",
                 "choices": [
                     ("A", "Alle verteilen sich ohne Grund"),
@@ -2297,6 +2306,7 @@ BOSS_TEMPLATES = {
             {
                 "name": "PHASE 4 — ENRAGE",
                 "attack": "💀 Ende der Sterne",
+                "mechanic_type": "enrage",
                 "question": "Jupiter beginnt seinen finalen Enrage. Was ist jetzt das zentrale Ziel der Gruppe?",
                 "choices": [
                     ("A", "So schnell wie möglich verbleibenden Schaden verursachen"),
@@ -2311,6 +2321,116 @@ BOSS_TEMPLATES = {
 }
 
 active_boss_battles = {}
+
+boss_party_lobbies = {}
+
+ROLE_ICONS = {
+    "Tank": "🛡️",
+    "Heiler": "💚",
+    "DPS": "⚔️",
+}
+
+MECHANIC_INFO = {
+    "aoe": ("🟠 AoE", "Gefährliche Fläche – rechtzeitig ausweichen."),
+    "tankbuster": ("🛡️ Tankbuster", "Schwerer Treffer auf den Tank."),
+    "raidwide": ("💥 Raidwide", "Die gesamte Gruppe erleidet Schaden."),
+    "stack": ("🔻 Stack", "Die Gruppe muss zusammenstehen."),
+    "spread": ("↔️ Spread", "Spieler müssen Abstand voneinander halten."),
+    "enrage": ("💀 ENRAGE", "Letzte Schadensprüfung – der Boss muss fallen."),
+}
+
+def _party_lobby_key(guild_id: int, channel_id: int):
+    return (guild_id, channel_id)
+
+def _party_members_text(players: dict) -> str:
+    if not players:
+        return "Noch keine Abenteurer angemeldet."
+    lines = []
+    for uid, data in players.items():
+        icon = ROLE_ICONS.get(data["role"], "•")
+        lines.append(f"{icon} **{data['name']}** — {data['role']} — ❤️ {data['hp']}/{data['max_hp']}")
+    return "\n".join(lines)
+
+def party_lobby_embed(lobby: dict) -> discord.Embed:
+    embed = discord.Embed(
+        title="⚔️ KI-Catnip — Kampfgruppe",
+        description="Meldet euch für den nächsten Bosskampf an. Catnip zählt schon mal die Pflaster. 🐾",
+    )
+    embed.add_field(name="👥 Gruppe", value=_party_members_text(lobby["players"]), inline=False)
+    embed.add_field(
+        name="📋 Rollen",
+        value="🛡️ **Tank** • 💚 **Heiler** • ⚔️ **DPS**\nJeder Spieler kann genau eine Rolle wählen.",
+        inline=False,
+    )
+    embed.set_footer(text=f"Angemeldet: {len(lobby['players'])}/8")
+    return embed
+
+class BossPartyView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=1800)
+
+    async def _join(self, interaction: discord.Interaction, role: str):
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+            return
+        key = _party_lobby_key(interaction.guild.id, interaction.channel_id)
+        lobby = boss_party_lobbies.get(key)
+        if not lobby:
+            await interaction.response.send_message("Diese Anmeldung ist nicht mehr aktiv.", ephemeral=True)
+            return
+        if interaction.user.id not in lobby["players"] and len(lobby["players"]) >= 8:
+            await interaction.response.send_message("Die Kampfgruppe ist bereits voll.", ephemeral=True)
+            return
+
+        lobby["players"][interaction.user.id] = {
+            "name": interaction.user.display_name,
+            "role": role,
+            "hp": 100,
+            "max_hp": 100,
+        }
+        await interaction.response.edit_message(embed=party_lobby_embed(lobby), view=self)
+
+    @discord.ui.button(label="Tank", emoji="🛡️", style=discord.ButtonStyle.primary)
+    async def tank(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._join(interaction, "Tank")
+
+    @discord.ui.button(label="Heiler", emoji="💚", style=discord.ButtonStyle.success)
+    async def healer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._join(interaction, "Heiler")
+
+    @discord.ui.button(label="DPS", emoji="⚔️", style=discord.ButtonStyle.danger)
+    async def dps(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._join(interaction, "DPS")
+
+    @discord.ui.button(label="Abmelden", emoji="🚪", style=discord.ButtonStyle.secondary)
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+            return
+        key = _party_lobby_key(interaction.guild.id, interaction.channel_id)
+        lobby = boss_party_lobbies.get(key)
+        if not lobby:
+            await interaction.response.send_message("Diese Anmeldung ist nicht mehr aktiv.", ephemeral=True)
+            return
+        lobby["players"].pop(interaction.user.id, None)
+        await interaction.response.edit_message(embed=party_lobby_embed(lobby), view=self)
+
+@client.tree.command(name="bossgruppe", description="Öffnet die Anmeldung für eine Bosskampf-Gruppe.")
+async def bossgruppe(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Nur KI-Catnip-Administratoren dürfen eine Kampfgruppe eröffnen.",
+            ephemeral=True,
+        )
+        return
+    if interaction.guild is None:
+        await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+        return
+    key = _party_lobby_key(interaction.guild.id, interaction.channel_id)
+    lobby = {"players": {}}
+    boss_party_lobbies[key] = lobby
+    await interaction.response.send_message(embed=party_lobby_embed(lobby), view=BossPartyView())
+
 
 
 def _boss_key(guild_id: int, channel_id: int):
@@ -2351,6 +2471,10 @@ def boss_embed(state: dict, *, message: str | None = None) -> discord.Embed:
     )
     embed.add_field(name="🔥 Aktuelle Phase", value=phase["name"], inline=False)
     embed.add_field(name="⚡ Attacke", value=phase["attack"], inline=False)
+    mech_name, mech_hint = MECHANIC_INFO.get(phase.get("mechanic_type", "aoe"), ("⚙️ Mechanik", ""))
+    embed.add_field(name="⚙️ Mechanik-Typ", value=f"**{mech_name}** — {mech_hint}", inline=False)
+    if state.get("players"):
+        embed.add_field(name="👥 Party", value=_party_members_text(state["players"]), inline=False)
     embed.add_field(name="❓ Mechanik", value=phase["question"], inline=False)
 
     options = "\n".join(f"**{key})** {label}" for key, label in phase["choices"])
@@ -2445,7 +2569,39 @@ async def process_boss_choice(
         return
 
     state["wrong"] += 1
-    state["party_hp"] = max(0, state["party_hp"] - state["wrong_damage"])
+    mechanic_type = phase.get("mechanic_type", "aoe")
+    players = state.get("players", {})
+
+    if players:
+        damage_total = 0
+        if mechanic_type == "tankbuster":
+            targets = [p for p in players.values() if p["role"] == "Tank"] or list(players.values())[:1]
+            per_target = 55
+        elif mechanic_type == "raidwide":
+            targets = list(players.values())
+            per_target = 25
+        elif mechanic_type == "stack":
+            targets = list(players.values())
+            per_target = 30
+        elif mechanic_type == "spread":
+            targets = list(players.values())
+            per_target = 35
+        elif mechanic_type == "enrage":
+            targets = list(players.values())
+            per_target = 100
+        else:
+            targets = [players.get(interaction.user.id)] if players.get(interaction.user.id) else list(players.values())[:1]
+            per_target = 40
+
+        for target in [t for t in targets if t]:
+            before = target["hp"]
+            target["hp"] = max(0, target["hp"] - per_target)
+            damage_total += before - target["hp"]
+
+        state["party_hp"] = sum(p["hp"] for p in players.values())
+    else:
+        damage_total = state["wrong_damage"]
+        state["party_hp"] = max(0, state["party_hp"] - state["wrong_damage"])
 
     if state["party_hp"] <= 0:
         await finish_boss_defeat(interaction, key, state)
@@ -2456,7 +2612,7 @@ async def process_boss_choice(
             state,
             message=(
                 f"💥 **{interaction.user.display_name} liegt daneben!** "
-                f"Die Party verliert **{state['wrong_damage']} HP**. "
+                f"Die Party verliert **{damage_total} HP**. "
                 "Die Mechanik bleibt aktiv – ein anderer Spieler kann sie noch lösen."
             ),
         ),
@@ -2527,7 +2683,17 @@ async def bossstart(interaction: discord.Interaction, boss: app_commands.Choice[
         "correct": 0,
         "wrong": 0,
         "answered_users": set(),
+        "players": {},
     }
+
+    lobby = boss_party_lobbies.get(key)
+    if lobby and lobby["players"]:
+        state["players"] = {
+            uid: dict(data) for uid, data in lobby["players"].items()
+        }
+        state["party_max_hp"] = sum(p["max_hp"] for p in state["players"].values())
+        state["party_hp"] = sum(p["hp"] for p in state["players"].values())
+
     active_boss_battles[key] = state
 
     await interaction.response.send_message(
@@ -2609,7 +2775,39 @@ async def bossantwort(interaction: discord.Interaction, antwort: str):
         return
 
     state["wrong"] += 1
-    state["party_hp"] = max(0, state["party_hp"] - state["wrong_damage"])
+    mechanic_type = phase.get("mechanic_type", "aoe")
+    players = state.get("players", {})
+
+    if players:
+        damage_total = 0
+        if mechanic_type == "tankbuster":
+            targets = [p for p in players.values() if p["role"] == "Tank"] or list(players.values())[:1]
+            per_target = 55
+        elif mechanic_type == "raidwide":
+            targets = list(players.values())
+            per_target = 25
+        elif mechanic_type == "stack":
+            targets = list(players.values())
+            per_target = 30
+        elif mechanic_type == "spread":
+            targets = list(players.values())
+            per_target = 35
+        elif mechanic_type == "enrage":
+            targets = list(players.values())
+            per_target = 100
+        else:
+            targets = [players.get(interaction.user.id)] if players.get(interaction.user.id) else list(players.values())[:1]
+            per_target = 40
+
+        for target in [t for t in targets if t]:
+            before = target["hp"]
+            target["hp"] = max(0, target["hp"] - per_target)
+            damage_total += before - target["hp"]
+
+        state["party_hp"] = sum(p["hp"] for p in players.values())
+    else:
+        damage_total = state["wrong_damage"]
+        state["party_hp"] = max(0, state["party_hp"] - state["wrong_damage"])
 
     if state["party_hp"] <= 0:
         active_boss_battles.pop(key, None)
@@ -2621,7 +2819,7 @@ async def bossantwort(interaction: discord.Interaction, antwort: str):
     await interaction.response.send_message(
         embed=boss_embed(
             state,
-            message=f"💥 Falsch! Die Party verliert **{state['wrong_damage']} HP**.",
+            message=f"💥 Falsch! Die Party verliert **{damage_total} HP**.",
         ),
         view=BossAnswerView(),
     )
@@ -2707,7 +2905,7 @@ async def on_ready():
     print(f"✓ Modell: {GEMINI_MODEL}")
     print(f"✓ @Mention-Fragen: aktiv")
     print(f"✓ Catnip-Persönlichkeit: Stufe 3 aktiv")
-    print(f"✓ Bosskämpfe: Stufe 4.1 aktiv (Buttons + Party-HP + Victory/Defeat)")
+    print(f"✓ Bosskämpfe: Stufe 4.2 aktiv (Rollen + Einzel-HP + FFXIV-Mechaniken)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
