@@ -2196,6 +2196,409 @@ async def botinfo(interaction: discord.Interaction):
 
 
 
+
+# ============================================================
+# STUFE 8.1 — EVENT-ANMELDUNG & TEILNEHMERVERWALTUNG
+# ============================================================
+
+active_event_signups = {}
+
+EVENT_ROLE_ICONS = {
+    "Tank": "🛡️",
+    "Heiler": "💚",
+    "DPS": "⚔️",
+    "Dabei": "✅",
+    "Ersatzbank": "🪑",
+}
+
+
+def _event_key(guild_id: int, channel_id: int):
+    return (guild_id, channel_id)
+
+
+def _event_signup_counts(signups: dict):
+    counts = {role: 0 for role in EVENT_ROLE_ICONS}
+    for data in signups.values():
+        role = data.get("role")
+        if role in counts:
+            counts[role] += 1
+    return counts
+
+
+def _event_signup_lines(signups: dict, role: str):
+    rows = []
+    for user_id, data in signups.items():
+        if data.get("role") == role:
+            rows.append(f"• <@{user_id}>")
+    return "\n".join(rows) if rows else "—"
+
+
+def event_signup_embed(state: dict) -> discord.Embed:
+    signups = state["signups"]
+    counts = _event_signup_counts(signups)
+
+    embed = discord.Embed(
+        title=f"📅 {state['title']}",
+        description=state.get("description") or "KI-Catnip verwaltet eure Anmeldung. 🐾",
+    )
+
+    embed.add_field(
+        name="🕒 Termin",
+        value=state.get("when") or "Nicht angegeben",
+        inline=False,
+    )
+
+    if state.get("max_players", 0) > 0:
+        active_count = sum(
+            1 for entry in signups.values()
+            if entry.get("role") != "Ersatzbank"
+        )
+        embed.add_field(
+            name="👥 Plätze",
+            value=f"**{active_count}/{state['max_players']}**",
+            inline=True,
+        )
+    else:
+        embed.add_field(
+            name="👥 Plätze",
+            value="Keine feste Begrenzung",
+            inline=True,
+        )
+
+    embed.add_field(
+        name="🛡️ Tank",
+        value=f"**{counts['Tank']}**\n{_event_signup_lines(signups, 'Tank')}",
+        inline=True,
+    )
+    embed.add_field(
+        name="💚 Heiler",
+        value=f"**{counts['Heiler']}**\n{_event_signup_lines(signups, 'Heiler')}",
+        inline=True,
+    )
+    embed.add_field(
+        name="⚔️ DPS",
+        value=f"**{counts['DPS']}**\n{_event_signup_lines(signups, 'DPS')}",
+        inline=True,
+    )
+    embed.add_field(
+        name="✅ Dabei",
+        value=f"**{counts['Dabei']}**\n{_event_signup_lines(signups, 'Dabei')}",
+        inline=True,
+    )
+    embed.add_field(
+        name="🪑 Ersatzbank",
+        value=f"**{counts['Ersatzbank']}**\n{_event_signup_lines(signups, 'Ersatzbank')}",
+        inline=True,
+    )
+
+    embed.add_field(
+        name="📌 Anmeldung",
+        value=(
+            "Wähle unten deine Rolle oder **Dabei**.\n"
+            "Mit **Abmelden** entfernst du dich wieder."
+        ),
+        inline=False,
+    )
+
+    embed.set_footer(
+        text=f"Erstellt von {state['creator_name']} • KI-Catnip Event-Anmeldung"
+    )
+    return embed
+
+
+def _active_signup_count(state: dict) -> int:
+    return sum(
+        1 for entry in state["signups"].values()
+        if entry.get("role") != "Ersatzbank"
+    )
+
+
+class EventSignupView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _set_role(
+        self,
+        interaction: discord.Interaction,
+        role: str,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Event-Anmeldungen funktionieren nur auf einem Server.",
+                ephemeral=True,
+            )
+            return
+
+        key = _event_key(interaction.guild.id, interaction.channel_id)
+        state = active_event_signups.get(key)
+
+        if not state:
+            await interaction.response.send_message(
+                "📅 Diese Event-Anmeldung ist nicht mehr aktiv.",
+                ephemeral=True,
+            )
+            return
+
+        current = state["signups"].get(interaction.user.id)
+        max_players = int(state.get("max_players", 0))
+
+        # Ersatzbank zählt nicht als aktiver Platz.
+        wants_active_slot = role != "Ersatzbank"
+        already_active = current and current.get("role") != "Ersatzbank"
+
+        if (
+            wants_active_slot
+            and not already_active
+            and max_players > 0
+            and _active_signup_count(state) >= max_players
+        ):
+            await interaction.response.send_message(
+                "⚠️ Die aktiven Plätze sind bereits voll. "
+                "Du kannst dich noch auf die **Ersatzbank** setzen.",
+                ephemeral=True,
+            )
+            return
+
+        state["signups"][interaction.user.id] = {
+            "name": interaction.user.display_name,
+            "role": role,
+        }
+
+        await interaction.response.edit_message(
+            embed=event_signup_embed(state),
+            view=self,
+        )
+
+    @discord.ui.button(label="Tank", emoji="🛡️", style=discord.ButtonStyle.primary, row=0)
+    async def tank(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._set_role(interaction, "Tank")
+
+    @discord.ui.button(label="Heiler", emoji="💚", style=discord.ButtonStyle.success, row=0)
+    async def healer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._set_role(interaction, "Heiler")
+
+    @discord.ui.button(label="DPS", emoji="⚔️", style=discord.ButtonStyle.danger, row=0)
+    async def dps(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._set_role(interaction, "DPS")
+
+    @discord.ui.button(label="Dabei", emoji="✅", style=discord.ButtonStyle.secondary, row=1)
+    async def dabei(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._set_role(interaction, "Dabei")
+
+    @discord.ui.button(label="Ersatzbank", emoji="🪑", style=discord.ButtonStyle.secondary, row=1)
+    async def reserve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._set_role(interaction, "Ersatzbank")
+
+    @discord.ui.button(label="Abmelden", emoji="❌", style=discord.ButtonStyle.secondary, row=1)
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Event-Anmeldungen funktionieren nur auf einem Server.",
+                ephemeral=True,
+            )
+            return
+
+        key = _event_key(interaction.guild.id, interaction.channel_id)
+        state = active_event_signups.get(key)
+
+        if not state:
+            await interaction.response.send_message(
+                "📅 Diese Event-Anmeldung ist nicht mehr aktiv.",
+                ephemeral=True,
+            )
+            return
+
+        state["signups"].pop(interaction.user.id, None)
+
+        await interaction.response.edit_message(
+            embed=event_signup_embed(state),
+            view=self,
+        )
+
+
+@client.tree.command(
+    name="eventerstellen",
+    description="Erstellt eine KI-Catnip-Event-Anmeldung mit Rollen-Buttons."
+)
+@app_commands.describe(
+    titel="Name des Events",
+    termin="Datum/Uhrzeit oder freie Terminangabe",
+    beschreibung="Kurze Eventbeschreibung",
+    max_spieler="Optional: maximale aktive Teilnehmerzahl"
+)
+async def eventerstellen(
+    interaction: discord.Interaction,
+    titel: str,
+    termin: str,
+    beschreibung: str = "",
+    max_spieler: app_commands.Range[int, 0, 50] = 8,
+):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Nur KI-Catnip-Administratoren dürfen Event-Anmeldungen erstellen.",
+            ephemeral=True,
+        )
+        return
+
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Event-Anmeldungen funktionieren nur auf einem Discord-Server.",
+            ephemeral=True,
+        )
+        return
+
+    key = _event_key(interaction.guild.id, interaction.channel_id)
+
+    if key in active_event_signups:
+        await interaction.response.send_message(
+            "⚠️ In diesem Channel läuft bereits eine Event-Anmeldung. "
+            "Nutze zuerst `/eventbeenden`.",
+            ephemeral=True,
+        )
+        return
+
+    state = {
+        "title": titel.strip(),
+        "when": termin.strip(),
+        "description": beschreibung.strip(),
+        "max_players": int(max_spieler),
+        "creator_id": interaction.user.id,
+        "creator_name": interaction.user.display_name,
+        "signups": {},
+    }
+
+    active_event_signups[key] = state
+
+    await interaction.response.send_message(
+        embed=event_signup_embed(state),
+        view=EventSignupView(),
+    )
+
+
+@client.tree.command(
+    name="eventstatus",
+    description="Zeigt den aktuellen Stand der Event-Anmeldung."
+)
+async def eventstatus(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Event-Anmeldungen funktionieren nur auf einem Server.",
+            ephemeral=True,
+        )
+        return
+
+    state = active_event_signups.get(
+        _event_key(interaction.guild.id, interaction.channel_id)
+    )
+
+    if not state:
+        await interaction.response.send_message(
+            "📅 In diesem Channel läuft aktuell keine Event-Anmeldung.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        embed=event_signup_embed(state),
+        ephemeral=True,
+    )
+
+
+@client.tree.command(
+    name="eventliste",
+    description="Admin: zeigt eine kompakte Teilnehmerliste der aktuellen Anmeldung."
+)
+async def eventliste(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Dieser Befehl ist nur für KI-Catnip-Administratoren verfügbar.",
+            ephemeral=True,
+        )
+        return
+
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Nur auf einem Server verfügbar.",
+            ephemeral=True,
+        )
+        return
+
+    state = active_event_signups.get(
+        _event_key(interaction.guild.id, interaction.channel_id)
+    )
+
+    if not state:
+        await interaction.response.send_message(
+            "📅 Hier läuft aktuell keine Event-Anmeldung.",
+            ephemeral=True,
+        )
+        return
+
+    lines = []
+    for role in ("Tank", "Heiler", "DPS", "Dabei", "Ersatzbank"):
+        members = [
+            f"<@{uid}>"
+            for uid, data in state["signups"].items()
+            if data.get("role") == role
+        ]
+        lines.append(
+            f"{EVENT_ROLE_ICONS[role]} **{role}:** "
+            + (", ".join(members) if members else "—")
+        )
+
+    await interaction.response.send_message(
+        f"📋 **Teilnehmerliste — {state['title']}**\n\n"
+        + "\n".join(lines),
+        ephemeral=True,
+    )
+
+
+@client.tree.command(
+    name="eventbeenden",
+    description="Beendet die Event-Anmeldung im aktuellen Channel."
+)
+async def eventbeenden(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Nur KI-Catnip-Administratoren dürfen Event-Anmeldungen beenden.",
+            ephemeral=True,
+        )
+        return
+
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Nur auf einem Server verfügbar.",
+            ephemeral=True,
+        )
+        return
+
+    key = _event_key(interaction.guild.id, interaction.channel_id)
+    state = active_event_signups.pop(key, None)
+
+    if not state:
+        await interaction.response.send_message(
+            "📅 Hier läuft aktuell keine Event-Anmeldung.",
+            ephemeral=True,
+        )
+        return
+
+    counts = _event_signup_counts(state["signups"])
+    total_active = _active_signup_count(state)
+
+    embed = discord.Embed(
+        title=f"📅 Anmeldung beendet — {state['title']}",
+        description=(
+            f"Die Anmeldung wurde geschlossen.\n\n"
+            f"👥 **Aktive Teilnehmer:** {total_active}\n"
+            f"🪑 **Ersatzbank:** {counts['Ersatzbank']}\n\n"
+            "Die Teilnehmerliste bleibt in der letzten Event-Nachricht sichtbar."
+        ),
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+
+
 # ============================================================
 # STUFE 7.2 — RP-SPIELLEITER & PERSÖNLICHE QUESTS
 # ============================================================
@@ -4821,6 +5224,7 @@ async def on_ready():
     print(f"✓ Spielerprofile: Stufe 6.2 aktiv (Auto-Rewards + Titel + Rangliste)")
     print(f"✓ Charakterprofile: Stufe 7.1 aktiv (/charaktererstellen, /charakterprofil, /charakterbearbeiten)")
     print(f"✓ RP-Spielleiter: Stufe 7.2 aktiv (/rp, /rpquest, /rpgruppe)")
+    print(f"✓ Event-Anmeldung: Stufe 8.1 aktiv (/eventerstellen, Rollen-Buttons, /eventliste)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
