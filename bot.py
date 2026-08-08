@@ -981,6 +981,13 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    print(
+        f"Discord-Nachricht empfangen: user={message.author} "
+        f"channel={message.channel.id} "
+        f"user_mentions={len(message.mentions)} "
+        f"role_mentions={len(getattr(message, 'raw_role_mentions', []) or [])}"
+    )
+
     # Rückkehr-Begrüßung im persönlichen FFXIV-Channel.
     await maybe_send_return_greeting(message)
 
@@ -988,31 +995,51 @@ async def on_message(message: discord.Message):
         return
 
     # Robuste Mention-Erkennung:
-    # 1) Discord-Hilfsmethode
-    # 2) message.mentions
-    # 3) rohe <@ID>/<@!ID>-Erwähnung im Nachrichtentext
-    raw_mention = (
+    # 1) Bot-User direkt erwähnt
+    # 2) rohe <@ID>/<@!ID>-Erwähnung
+    # 3) Discord-verwaltete Bot-Rolle erwähnt (z.B. @KI-CATNIP)
+    raw_user_mention = (
         f"<@{client.user.id}>" in message.content
         or f"<@!{client.user.id}>" in message.content
     )
-    mentioned = (
+
+    user_mentioned = (
         client.user.mentioned_in(message)
         or client.user in message.mentions
-        or raw_mention
+        or raw_user_mention
     )
+
+    bot_role_ids = set()
+    if message.guild and message.guild.me:
+        for role in message.guild.me.roles:
+            try:
+                if role.is_bot_managed():
+                    bot_role_ids.add(role.id)
+            except Exception:
+                pass
+
+    mentioned_bot_role_ids = set(getattr(message, "raw_role_mentions", []) or [])
+    role_mentioned = bool(bot_role_ids & mentioned_bot_role_ids)
+
+    mentioned = user_mentioned or role_mentioned
 
     if not mentioned:
         return
 
+    mention_kind = "Bot-User" if user_mentioned else "Bot-Rolle"
     print(
-        f"@Mention erkannt: user={message.author} "
+        f"@Mention erkannt ({mention_kind}): user={message.author} "
         f"channel={message.channel.id}"
     )
 
-    # Bot-Erwähnung aus der eigentlichen Frage entfernen.
+    # Bot-User- und Bot-Rollen-Erwähnungen aus der eigentlichen Frage entfernen.
     question = message.content
     question = question.replace(f"<@{client.user.id}>", "")
     question = question.replace(f"<@!{client.user.id}>", "")
+
+    for role_id in bot_role_ids:
+        question = question.replace(f"<@&{role_id}>", "")
+
     question = question.strip()
 
     if not question:
