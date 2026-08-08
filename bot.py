@@ -24,7 +24,7 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 BOT_NAME = os.getenv("BOT_NAME", "KI-Catnip")
 DEFAULT_SPOILER_LEVEL = os.getenv("DEFAULT_SPOILER_LEVEL", "Dawntrail")
 WEB_SEARCH = os.getenv("WEB_SEARCH", "true").lower() in {"1", "true", "yes", "ja"}
@@ -104,6 +104,41 @@ SINGLE_REQUEST_SPOILER_PHRASES = (
 )
 
 
+SPOILER_PROGRESS = {
+    "spoilerfrei": {
+        "label": "Spoilerfrei",
+        "instruction": "Keine wichtigen Storyspoiler aus irgendeiner Erweiterung verraten.",
+    },
+    "arr": {
+        "label": "A Realm Reborn",
+        "instruction": "Storydetails bis einschließlich A Realm Reborn sind erlaubt. Alles ab Heavensward bleibt geschützt.",
+    },
+    "heavensward": {
+        "label": "Heavensward",
+        "instruction": "Storydetails bis einschließlich Heavensward sind erlaubt. Alles ab Stormblood bleibt geschützt.",
+    },
+    "stormblood": {
+        "label": "Stormblood",
+        "instruction": "Storydetails bis einschließlich Stormblood sind erlaubt. Alles ab Shadowbringers bleibt geschützt.",
+    },
+    "shadowbringers": {
+        "label": "Shadowbringers",
+        "instruction": "Storydetails bis einschließlich Shadowbringers sind erlaubt. Alles ab Endwalker bleibt geschützt.",
+    },
+    "endwalker": {
+        "label": "Endwalker",
+        "instruction": "Storydetails bis einschließlich Endwalker sind erlaubt. Alles ab Dawntrail bleibt geschützt.",
+    },
+    "dawntrail": {
+        "label": "Dawntrail",
+        "instruction": "Storydetails bis einschließlich Dawntrail sind erlaubt. Spätere noch nicht freigegebene Storyinhalte bleiben geschützt.",
+    },
+}
+
+DEFAULT_PROGRESS_KEY = "spoilerfrei"
+PROGRESS_TOPIC_KEY = "FFXIV_SPOILER_LEVEL"
+
+
 # Letzte Aktivität pro privatem User-Channel.
 # Wird nur im Arbeitsspeicher gehalten; nach einem Bot-Neustart beginnt die
 # Rückkehr-Erkennung neu.
@@ -146,8 +181,8 @@ QUELLEN & AKTUALITÄT
 - Charakterprofile müssen nach Möglichkeit auf dem offiziellen Lodestone geprüft werden.
 
 SPOILER-SCHUTZ — HÖCHSTE PRIORITÄT
-- Spoiler sind standardmäßig VERBOTEN.
-- Ohne ausdrückliche Spoilerfreigabe darfst du KEINE wichtigen Storyenthüllungen nennen.
+- Spoiler sind standardmäßig VERBOTEN, außer innerhalb des ausdrücklich gespeicherten persönlichen Story-Fortschritts.
+- Ohne Vollfreigabe darfst du nur Storydetails nennen, die innerhalb des persönlichen Story-Fortschritts liegen.
 - Dazu zählen insbesondere: Tode, Opfer, Verrat, geheime Identitäten, wahre Herkunft,
   spätere Bündnisse/Feindschaften, Bossidentitäten, spätere Formen, Enden von Handlungsbögen,
   zentrale Wendungen, Schicksale von Figuren und überraschende Rückkehrer.
@@ -472,15 +507,22 @@ def spoilers_allowed_for_request(channel_id: int, question: str) -> bool:
 
 
 def spoiler_status_text(channel_id: int) -> str:
+    progress = get_spoiler_progress(channel_id)
+    label = progress_label(progress)
+
     if channel_id in spoiler_enabled_channels:
         return (
-            "🔓 **Spoiler sind in diesem Channel derzeit ERLAUBT.**\n"
-            "Mit `/spoiler aus` aktivierst du den vollständigen Spoilerschutz wieder."
+            "🔓 **Vollständige Spoilerfreigabe ist derzeit AKTIV.**\n"
+            f"Dein gespeicherter Story-Fortschritt ist **{label}**.\n"
+            "Mit `/spoiler aus` kehrst du wieder zu dieser persönlichen Spoilergrenze zurück."
         )
+
     return (
-        "🔒 **Spoilerschutz ist AKTIV.**\n"
-        "KI-Catnip vermeidet wichtige Storyenthüllungen. "
-        "Mit `/spoiler an` kannst du Spoiler für diesen Channel ausdrücklich erlauben."
+        "🔒 **Persönlicher Spoilerschutz ist AKTIV.**\n"
+        f"Dein Story-Fortschritt: **{label}**\n"
+        "KI-Catnip darf nur bis zu diesem Stand spoilern. "
+        "Mit `/fortschritt` kannst du den Stand ändern oder mit `/spoiler an` "
+        "vorübergehend alles freigeben."
     )
 
 
@@ -504,15 +546,26 @@ async def ask_ai(channel_id: int, username: str, question: str, *, remember=True
             )
 
     allow_spoilers = spoilers_allowed_for_request(channel_id, question)
-
-    spoiler_instruction = (
-        "SPOILERFREIGABE FÜR DIESE ANFRAGE: JA. Größere Enthüllungen weiterhin deutlich markieren."
-        if allow_spoilers
-        else
-        "SPOILERFREIGABE FÜR DIESE ANFRAGE: NEIN. Strikter Spoilerschutz. "
-        "Keine Tode, Verrate, Identitätsenthüllungen, Bossidentitäten, Schicksale, "
-        "Storywendungen oder spätere Ereignisse verraten."
+    progress_key = get_spoiler_progress(channel_id)
+    progress = SPOILER_PROGRESS.get(
+        progress_key, SPOILER_PROGRESS[DEFAULT_PROGRESS_KEY]
     )
+
+    if allow_spoilers:
+        spoiler_instruction = (
+            "SPOILERFREIGABE FÜR DIESE ANFRAGE: JA. "
+            "Alle Storybereiche dürfen beantwortet werden. "
+            "Größere Enthüllungen weiterhin deutlich mit **⚠️ SPOILER** markieren."
+        )
+    else:
+        spoiler_instruction = (
+            "SPOILERFREIGABE FÜR DIESE ANFRAGE: NEIN. "
+            f"PERSÖNLICHER STORY-FORTSCHRITT: {progress['label']}. "
+            f"{progress['instruction']} "
+            "Tode, Verrat, Identitätsenthüllungen, Bossidentitäten, Schicksale und "
+            "Storywendungen jenseits dieser Grenze niemals verraten. "
+            "Bei Unsicherheit die spoilerärmere Antwort wählen."
+        )
 
     user_text = f"{username}: {question}\n\n{spoiler_instruction}"
     contents.append(
@@ -640,7 +693,66 @@ async def sync_event_admin_role(guild: discord.Guild):
 # ===========================================================================
 
 def private_channel_topic(member: discord.Member) -> str:
-    return f"FFXIV_PRIVAT_USER_ID={member.id}"
+    return (
+        f"FFXIV_PRIVAT_USER_ID={member.id} | "
+        f"{PROGRESS_TOPIC_KEY}={DEFAULT_PROGRESS_KEY}"
+    )
+
+
+def get_spoiler_progress_from_channel(channel) -> str:
+    if not isinstance(channel, discord.TextChannel) or not channel.topic:
+        return DEFAULT_PROGRESS_KEY
+
+    match = re.search(
+        rf"{re.escape(PROGRESS_TOPIC_KEY)}=([a-z]+)",
+        channel.topic,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return DEFAULT_PROGRESS_KEY
+
+    key = match.group(1).lower()
+    return key if key in SPOILER_PROGRESS else DEFAULT_PROGRESS_KEY
+
+
+def get_spoiler_progress(channel_id: int) -> str:
+    return get_spoiler_progress_from_channel(client.get_channel(channel_id))
+
+
+def progress_label(progress_key: str) -> str:
+    return SPOILER_PROGRESS.get(
+        progress_key, SPOILER_PROGRESS[DEFAULT_PROGRESS_KEY]
+    )["label"]
+
+
+async def set_spoiler_progress(channel: discord.TextChannel, progress_key: str):
+    if progress_key not in SPOILER_PROGRESS:
+        progress_key = DEFAULT_PROGRESS_KEY
+
+    topic = channel.topic or ""
+
+    if re.search(
+        rf"{re.escape(PROGRESS_TOPIC_KEY)}=[a-z]+",
+        topic,
+        flags=re.IGNORECASE,
+    ):
+        topic = re.sub(
+            rf"{re.escape(PROGRESS_TOPIC_KEY)}=[a-z]+",
+            f"{PROGRESS_TOPIC_KEY}={progress_key}",
+            topic,
+            flags=re.IGNORECASE,
+        )
+    else:
+        topic = (
+            f"{topic} | {PROGRESS_TOPIC_KEY}={progress_key}"
+            if topic
+            else f"{PROGRESS_TOPIC_KEY}={progress_key}"
+        )
+
+    await channel.edit(
+        topic=topic[:1024],
+        reason="KI-Catnip: persönlicher FFXIV-Storyfortschritt aktualisiert",
+    )
 
 
 def sanitize_channel_name(name: str) -> str:
@@ -871,11 +983,12 @@ async def create_private_ffxiv_channel(member: discord.Member):
         inline=False,
     )
     embed.add_field(
-        name="🔒 Spoilerschutz",
+        name="🔒 Persönlicher Spoilerschutz",
         value=(
-            "Standardmäßig sind **alle wichtigen Storyspoiler gesperrt**.\n"
-            "`/spoiler an` – Spoiler für diesen Channel erlauben\n"
-            "`/spoiler aus` – Spoilerschutz wieder aktivieren\n"
+            "Standardmäßig ist KI-Catnip **komplett spoilerfrei**.\n"
+            "`/fortschritt` – deinen persönlichen Story-Stand festlegen\n"
+            "`/spoiler an` – vorübergehend alle Spoiler erlauben\n"
+            "`/spoiler aus` – wieder auf deinen persönlichen Fortschritt begrenzen\n"
             "`/spoiler status` – aktuellen Zustand prüfen"
         ),
         inline=False,
@@ -1746,6 +1859,67 @@ async def budget(interaction: discord.Interaction):
 
 
 
+
+@client.tree.command(
+    name="fortschritt",
+    description="Legt deinen persönlichen FFXIV-Storyfortschritt für den Spoilerschutz fest."
+)
+@app_commands.describe(
+    stand="Bis zu welcher Erweiterung darf KI-Catnip Storydetails nennen?"
+)
+@app_commands.choices(stand=[
+    app_commands.Choice(name="Komplett spoilerfrei", value="spoilerfrei"),
+    app_commands.Choice(name="A Realm Reborn", value="arr"),
+    app_commands.Choice(name="Heavensward", value="heavensward"),
+    app_commands.Choice(name="Stormblood", value="stormblood"),
+    app_commands.Choice(name="Shadowbringers", value="shadowbringers"),
+    app_commands.Choice(name="Endwalker", value="endwalker"),
+    app_commands.Choice(name="Dawntrail", value="dawntrail"),
+])
+async def fortschritt(
+    interaction: discord.Interaction,
+    stand: app_commands.Choice[str],
+):
+    if not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.response.send_message(
+            "🔒 Deinen Story-Fortschritt kannst du nur in einem Textchannel festlegen.",
+            ephemeral=True,
+        )
+        return
+
+    owner_id = private_channel_owner_id(interaction.channel)
+    if owner_id is None:
+        await interaction.response.send_message(
+            "🔒 Bitte verwende `/fortschritt` in deinem persönlichen KI-Catnip-Channel.",
+            ephemeral=True,
+        )
+        return
+
+    if interaction.user.id != owner_id and not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Du kannst nur deinen eigenen Story-Fortschritt ändern.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await set_spoiler_progress(interaction.channel, stand.value)
+        spoiler_enabled_channels.discard(interaction.channel_id)
+
+        await interaction.response.send_message(
+            f"📖 **Story-Fortschritt gespeichert: {progress_label(stand.value)}**\\n"
+            "🔒 Die vollständige Spoilerfreigabe wurde ausgeschaltet. "
+            "KI-Catnip schützt jetzt automatisch alles, was nach diesem Stand liegt.",
+            ephemeral=True,
+        )
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "⚠️ Ich kann den Fortschritt nicht dauerhaft speichern. "
+            "Mir fehlt die Berechtigung **Kanäle verwalten / Manage Channels**.",
+            ephemeral=True,
+        )
+
+
 @client.tree.command(
     name="spoiler",
     description="Schaltet Story-Spoiler für diesen privaten Channel an oder aus."
@@ -1765,9 +1939,9 @@ async def spoiler(
     if modus.value == "an":
         spoiler_enabled_channels.add(channel_id)
         await interaction.response.send_message(
-            "🔓 **Spoiler wurden für diesen Channel ausdrücklich freigegeben.**\n"
-            "KI-Catnip darf jetzt auch wichtige Storyenthüllungen nennen. "
-            "Mit `/spoiler aus` kannst du den Schutz jederzeit wieder aktivieren.",
+            "🔓 **Vollständige Spoilerfreigabe aktiviert.**\n"
+            "KI-Catnip darf jetzt auch Inhalte nach deinem gespeicherten Story-Fortschritt nennen. "
+            "Mit `/spoiler aus` kehrst du wieder zu deiner persönlichen Spoilergrenze zurück.",
             ephemeral=True,
         )
         return
@@ -1775,8 +1949,8 @@ async def spoiler(
     if modus.value == "aus":
         spoiler_enabled_channels.discard(channel_id)
         await interaction.response.send_message(
-            "🔒 **Spoilerschutz aktiviert.**\n"
-            "KI-Catnip verrät ab jetzt keine wichtigen Storyenthüllungen mehr.",
+            f"🔒 **Persönlicher Spoilerschutz aktiviert.**\n"
+            f"KI-Catnip begrenzt Storydetails wieder auf **{progress_label(get_spoiler_progress(channel_id))}**.",
             ephemeral=True,
         )
         return
@@ -1792,7 +1966,9 @@ async def reset(interaction: discord.Interaction):
     history.pop(interaction.channel_id, None)
     spoiler_enabled_channels.discard(interaction.channel_id)
     await interaction.response.send_message(
-        "🧹 **Gesprächsverlauf gelöscht.**\n🔒 Spoilerschutz wurde ebenfalls wieder aktiviert.",
+        f"🧹 **Gesprächsverlauf gelöscht.**\n"
+        f"🔒 Vollständige Spoilerfreigabe ist aus. Dein gespeicherter Fortschritt "
+        f"bleibt **{progress_label(get_spoiler_progress(interaction.channel_id))}**.",
         ephemeral=True,
     )
 
@@ -1824,9 +2000,15 @@ def admin_status_embed(channel_id: int) -> discord.Embed:
         value="🟢 Aktiv" if WEB_SEARCH else "🔴 Deaktiviert",
         inline=True,
     )
+    progress = get_spoiler_progress(channel_id)
+    spoiler_value = (
+        f"🔓 Vollfreigabe · gespeichert: {progress_label(progress)}"
+        if channel_id in spoiler_enabled_channels
+        else f"🔒 Bis {progress_label(progress)}"
+    )
     embed.add_field(
         name="🔒 Spoilerschutz (dieser Channel)",
-        value="🔓 Spoiler erlaubt" if channel_id in spoiler_enabled_channels else "🔒 Aktiv",
+        value=spoiler_value,
         inline=True,
     )
     embed.add_field(
@@ -1875,7 +2057,7 @@ class AdminView(discord.ui.View):
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.refresh(interaction)
 
-    @discord.ui.button(label="Spoiler umschalten", emoji="🔒", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Vollspoiler umschalten", emoji="🔒", style=discord.ButtonStyle.primary)
     async def spoiler_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.channel_id in spoiler_enabled_channels:
             spoiler_enabled_channels.discard(self.channel_id)
@@ -1928,6 +2110,11 @@ async def botinfo(interaction: discord.Interaction):
     embed.add_field(
         name="💬 Einfach fragen",
         value=f"`@{BOT_NAME} deine Frage` oder `/ffxiv`",
+        inline=False,
+    )
+    embed.add_field(
+        name="🔒 Persönlicher Spoilerschutz",
+        value="`/fortschritt` · `/spoiler an|aus|status`",
         inline=False,
     )
     embed.add_field(
