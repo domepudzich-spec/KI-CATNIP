@@ -2342,13 +2342,23 @@ MECHANIC_INFO = {
 def _party_lobby_key(guild_id: int, channel_id: int):
     return (guild_id, channel_id)
 
+def _living_players(players: dict):
+    return [p for p in players.values() if p.get("hp", 0) > 0]
+
+def _sync_party_hp(state: dict):
+    players = state.get("players", {})
+    if players:
+        state["party_hp"] = sum(max(0, p["hp"]) for p in players.values())
+        state["party_max_hp"] = sum(p["max_hp"] for p in players.values())
+
 def _party_members_text(players: dict) -> str:
     if not players:
         return "Noch keine Abenteurer angemeldet."
     lines = []
     for uid, data in players.items():
         icon = ROLE_ICONS.get(data["role"], "•")
-        lines.append(f"{icon} **{data['name']}** — {data['role']} — ❤️ {data['hp']}/{data['max_hp']}")
+        status = "💀 K.O." if data["hp"] <= 0 else f"❤️ {data['hp']}/{data['max_hp']}"
+        lines.append(f"{icon} **{data['name']}** — {data['role']} — {status}")
     return "\n".join(lines)
 
 def party_lobby_embed(lobby: dict) -> discord.Embed:
@@ -2482,7 +2492,7 @@ def boss_embed(state: dict, *, message: str | None = None) -> discord.Embed:
     embed.set_footer(
         text=(
             f"Richtige Antworten: {state['correct']} • Fehler: {state['wrong']} "
-            f"• Fehler-Schaden: {state['wrong_damage']} Party-HP"
+            f"• Schaden richtet sich nach Mechanik und Ziel"
         )
     )
     return embed
@@ -2532,6 +2542,15 @@ async def process_boss_choice(
         )
         return
 
+    players = state.get("players", {})
+    player = players.get(interaction.user.id)
+    if player and player.get("hp", 0) <= 0:
+        await interaction.response.send_message(
+            "💀 Du bist K.O. und kannst keine Mechanik beantworten. Ein Heiler muss dich zuerst wiederbeleben.",
+            ephemeral=True,
+        )
+        return
+
     if interaction.user.id in state["answered_users"]:
         await interaction.response.send_message(
             "🐱 Du hast diese Mechanik bereits beantwortet. Jetzt sind die anderen Abenteurer dran.",
@@ -2564,7 +2583,7 @@ async def process_boss_choice(
                     "Die nächste Phase beginnt!"
                 ),
             ),
-            view=BossAnswerView(),
+            view=BossCombatView(),
         )
         return
 
@@ -2575,22 +2594,24 @@ async def process_boss_choice(
     if players:
         damage_total = 0
         if mechanic_type == "tankbuster":
-            targets = [p for p in players.values() if p["role"] == "Tank"] or list(players.values())[:1]
+            living = _living_players(players)
+            targets = [p for p in living if p["role"] == "Tank"] or living[:1]
             per_target = 55
         elif mechanic_type == "raidwide":
-            targets = list(players.values())
+            targets = _living_players(players)
             per_target = 25
         elif mechanic_type == "stack":
-            targets = list(players.values())
+            targets = _living_players(players)
             per_target = 30
         elif mechanic_type == "spread":
-            targets = list(players.values())
+            targets = _living_players(players)
             per_target = 35
         elif mechanic_type == "enrage":
-            targets = list(players.values())
+            targets = _living_players(players)
             per_target = 100
         else:
-            targets = [players.get(interaction.user.id)] if players.get(interaction.user.id) else list(players.values())[:1]
+            living = _living_players(players)
+            targets = [players.get(interaction.user.id)] if players.get(interaction.user.id) and players[interaction.user.id]["hp"] > 0 else living[:1]
             per_target = 40
 
         for target in [t for t in targets if t]:
@@ -2603,7 +2624,7 @@ async def process_boss_choice(
         damage_total = state["wrong_damage"]
         state["party_hp"] = max(0, state["party_hp"] - state["wrong_damage"])
 
-    if state["party_hp"] <= 0:
+    if state["party_hp"] <= 0 or (players and not _living_players(players)):
         await finish_boss_defeat(interaction, key, state)
         return
 
@@ -2616,8 +2637,109 @@ async def process_boss_choice(
                 "Die Mechanik bleibt aktiv – ein anderer Spieler kann sie noch lösen."
             ),
         ),
-        view=BossAnswerView(),
+        view=BossCombatView(),
     )
+
+
+
+async def _survival_action(interaction: discord.Interaction, action: str):
+    if interaction.guild is None:
+        await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+        return
+
+    key = _boss_key(interaction.guild.id, interaction.channel_id)
+    state = active_boss_battles.get(key)
+    if not state:
+        await interaction.response.send_message("🐾 Hier läuft kein Bosskampf.", ephemeral=True)
+        return
+
+    players = state.get("players", {})
+    actor = players.get(interaction.user.id)
+    if not actor:
+        await interaction.response.send_message(
+            "Du bist nicht in der aktuellen Kampfgruppe angemeldet.",
+            ephemeral=True,
+        )
+        return
+
+    if actor["hp"] <= 0:
+        await interaction.response.send_message(
+            "💀 Du bist K.O. und kannst gerade keine Kampfaktion ausführen.",
+            ephemeral=True,
+        )
+        return
+
+    if action in {"heal", "revive"} and actor["role"] != "Heiler":
+        await interaction.response.send_message(
+            "💚 Diese Aktion ist nur für angemeldete Heiler verfügbar.",
+            ephemeral=True,
+        )
+        return
+
+    if action == "heal":
+        wounded = [p for p in players.values() if 0 < p["hp"] < p["max_hp"]]
+        if not wounded:
+            await interaction.response.send_message("✨ Niemand benötigt gerade Heilung.", ephemeral=True)
+            return
+        # Heilt automatisch das am stärksten verletzte lebende Gruppenmitglied.
+        target = min(wounded, key=lambda p: p["hp"] / p["max_hp"])
+        amount = min(35, target["max_hp"] - target["hp"])
+        target["hp"] += amount
+        _sync_party_hp(state)
+        await interaction.response.send_message(
+            embed=boss_embed(
+                state,
+                message=f"💚 **{actor['name']}** heilt **{target['name']}** um **{amount} HP**.",
+            ),
+            view=BossCombatView(),
+        )
+        return
+
+    if action == "revive":
+        ko = [p for p in players.values() if p["hp"] <= 0]
+        if not ko:
+            await interaction.response.send_message("✨ Niemand ist K.O.", ephemeral=True)
+            return
+        target = ko[0]
+        target["hp"] = 25
+        _sync_party_hp(state)
+        await interaction.response.send_message(
+            embed=boss_embed(
+                state,
+                message=f"✨ **{actor['name']}** belebt **{target['name']}** mit **25 HP** wieder!",
+            ),
+            view=BossCombatView(),
+        )
+        return
+
+
+class BossCombatView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="A", emoji="🅰️", style=discord.ButtonStyle.primary, row=0)
+    async def answer_a(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await process_boss_choice(interaction, "A")
+
+    @discord.ui.button(label="B", emoji="🅱️", style=discord.ButtonStyle.primary, row=0)
+    async def answer_b(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await process_boss_choice(interaction, "B")
+
+    @discord.ui.button(label="C", emoji="🇨", style=discord.ButtonStyle.secondary, row=0)
+    async def answer_c(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await process_boss_choice(interaction, "C")
+
+    @discord.ui.button(label="D", emoji="🇩", style=discord.ButtonStyle.secondary, row=0)
+    async def answer_d(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await process_boss_choice(interaction, "D")
+
+    @discord.ui.button(label="Heilen", emoji="💚", style=discord.ButtonStyle.success, row=1)
+    async def heal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _survival_action(interaction, "heal")
+
+    @discord.ui.button(label="Wiederbeleben", emoji="✨", style=discord.ButtonStyle.success, row=1)
+    async def revive(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _survival_action(interaction, "revive")
 
 
 class BossAnswerView(discord.ui.View):
@@ -2701,7 +2823,7 @@ async def bossstart(interaction: discord.Interaction, boss: app_commands.Choice[
             state,
             message=f"⚔️ **{boss.value}** betritt die Arena! Die Antwortbuttons sind bereit.",
         ),
-        view=BossAnswerView(),
+        view=BossCombatView(),
     )
 
 
@@ -2742,6 +2864,15 @@ async def bossantwort(interaction: discord.Interaction, antwort: str):
         await interaction.response.send_message("🐾 Hier läuft aktuell kein Bosskampf.", ephemeral=True)
         return
 
+    players = state.get("players", {})
+    player = players.get(interaction.user.id)
+    if player and player.get("hp", 0) <= 0:
+        await interaction.response.send_message(
+            "💀 Du bist K.O. und kannst keine Mechanik beantworten. Ein Heiler muss dich zuerst wiederbeleben.",
+            ephemeral=True,
+        )
+        return
+
     if interaction.user.id in state["answered_users"]:
         await interaction.response.send_message(
             "🐱 Du hast diese Mechanik bereits beantwortet.",
@@ -2770,7 +2901,7 @@ async def bossantwort(interaction: discord.Interaction, antwort: str):
         state["answered_users"].clear()
         await interaction.response.send_message(
             embed=boss_embed(state, message=f"✅ Richtig! {state['name']} erleidet **{damage} Schaden**."),
-            view=BossAnswerView(),
+            view=BossCombatView(),
         )
         return
 
@@ -2781,22 +2912,24 @@ async def bossantwort(interaction: discord.Interaction, antwort: str):
     if players:
         damage_total = 0
         if mechanic_type == "tankbuster":
-            targets = [p for p in players.values() if p["role"] == "Tank"] or list(players.values())[:1]
+            living = _living_players(players)
+            targets = [p for p in living if p["role"] == "Tank"] or living[:1]
             per_target = 55
         elif mechanic_type == "raidwide":
-            targets = list(players.values())
+            targets = _living_players(players)
             per_target = 25
         elif mechanic_type == "stack":
-            targets = list(players.values())
+            targets = _living_players(players)
             per_target = 30
         elif mechanic_type == "spread":
-            targets = list(players.values())
+            targets = _living_players(players)
             per_target = 35
         elif mechanic_type == "enrage":
-            targets = list(players.values())
+            targets = _living_players(players)
             per_target = 100
         else:
-            targets = [players.get(interaction.user.id)] if players.get(interaction.user.id) else list(players.values())[:1]
+            living = _living_players(players)
+            targets = [players.get(interaction.user.id)] if players.get(interaction.user.id) and players[interaction.user.id]["hp"] > 0 else living[:1]
             per_target = 40
 
         for target in [t for t in targets if t]:
@@ -2809,7 +2942,7 @@ async def bossantwort(interaction: discord.Interaction, antwort: str):
         damage_total = state["wrong_damage"]
         state["party_hp"] = max(0, state["party_hp"] - state["wrong_damage"])
 
-    if state["party_hp"] <= 0:
+    if state["party_hp"] <= 0 or (players and not _living_players(players)):
         active_boss_battles.pop(key, None)
         await interaction.response.send_message(
             f"💀 **DEFEAT!** Die Party wurde von **{state['name']}** besiegt."
@@ -2821,7 +2954,7 @@ async def bossantwort(interaction: discord.Interaction, antwort: str):
             state,
             message=f"💥 Falsch! Die Party verliert **{damage_total} HP**.",
         ),
-        view=BossAnswerView(),
+        view=BossCombatView(),
     )
 
 
@@ -2905,7 +3038,7 @@ async def on_ready():
     print(f"✓ Modell: {GEMINI_MODEL}")
     print(f"✓ @Mention-Fragen: aktiv")
     print(f"✓ Catnip-Persönlichkeit: Stufe 3 aktiv")
-    print(f"✓ Bosskämpfe: Stufe 4.2 aktiv (Rollen + Einzel-HP + FFXIV-Mechaniken)")
+    print(f"✓ Bosskämpfe: Stufe 4.3 aktiv (Heilung + K.O. + Wiederbelebung)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
