@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import io
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from collections import defaultdict, deque
@@ -5698,8 +5699,605 @@ async def eventadmin(interaction: discord.Interaction):
 
 
 
+# ============================================================
+# STUFE 9 — SCHATTENPFOTEN-WISSENSDATENBANK
+# Eigene FC-/Event-Lore, strikt getrennt von offizieller FFXIV-Lore
+# ============================================================
+
+SHADOWPAW_DB_MARKER = "KI_CATNIP_SHADOWPAW_DB_V1"
+shadowpaw_knowledge = {}
+
+SHADOWPAW_CATEGORIES = {
+    "charakter": ("👤", "Charakter"),
+    "ort": ("🗺️", "Ort"),
+    "boss": ("⚔️", "Boss"),
+    "gegenstand": ("💎", "Gegenstand"),
+    "fraktion": ("🛡️", "Fraktion"),
+    "ereignis": ("📜", "Ereignis"),
+    "sonstiges": ("🐾", "Sonstiges"),
+}
+
+
+def _shadowpaw_guild_store(guild_id: int) -> dict:
+    return shadowpaw_knowledge.setdefault(str(guild_id), {})
+
+
+def _shadowpaw_normalize_category(value: str) -> str:
+    value = (value or "").strip().lower()
+    aliases = {
+        "char": "charakter",
+        "character": "charakter",
+        "location": "ort",
+        "place": "ort",
+        "item": "gegenstand",
+        "faction": "fraktion",
+        "event": "ereignis",
+        "other": "sonstiges",
+    }
+    value = aliases.get(value, value)
+    return value if value in SHADOWPAW_CATEGORIES else "sonstiges"
+
+
+def _shadowpaw_entry_key(name: str) -> str:
+    return " ".join((name or "").lower().split())
+
+
+def _shadowpaw_entry_embed(entry: dict) -> discord.Embed:
+    category = entry.get("category", "sonstiges")
+    emoji, category_name = SHADOWPAW_CATEGORIES.get(
+        category, SHADOWPAW_CATEGORIES["sonstiges"]
+    )
+    embed = discord.Embed(
+        title=f"{emoji} {entry.get('name', 'Unbenannter Eintrag')}",
+        description=entry.get("content") or "Keine Beschreibung vorhanden.",
+    )
+    embed.add_field(
+        name="🐾 Wissensbereich",
+        value=f"Schattenpfoten-Lore • {category_name}",
+        inline=True,
+    )
+    if entry.get("tags"):
+        embed.add_field(
+            name="🏷️ Tags",
+            value=entry["tags"],
+            inline=True,
+        )
+    embed.add_field(
+        name="✍️ Eingetragen von",
+        value=entry.get("author_name", "Unbekannt"),
+        inline=True,
+    )
+    embed.add_field(
+        name="⚠️ Lore-Trennung",
+        value=(
+            "Dieser Eintrag gehört zur **Schattenpfoten-Wissensdatenbank** "
+            "und ist nicht automatisch offizielle Final-Fantasy-XIV-Lore."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="KI-Catnip • Schattenpfoten-Wissensdatenbank")
+    return embed
+
+
+def _shadowpaw_serialize_guild(guild_id: int) -> str:
+    payload = {
+        "marker": SHADOWPAW_DB_MARKER,
+        "guild_id": guild_id,
+        "entries": _shadowpaw_guild_store(guild_id),
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+async def _get_or_create_shadowpaw_data_channel(guild: discord.Guild):
+    # Nutzt bevorzugt denselben versteckten Datenbereich wie die Profile.
+    channel = discord.utils.get(guild.text_channels, name="ki-catnip-data")
+    if channel:
+        return channel
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+        ),
+    }
+    return await guild.create_text_channel(
+        "ki-catnip-data",
+        overwrites=overwrites,
+        reason="KI-Catnip Datenspeicher",
+    )
+
+
+async def save_shadowpaw_knowledge(guild: discord.Guild):
+    channel = await _get_or_create_shadowpaw_data_channel(guild)
+    content = _shadowpaw_serialize_guild(guild.id)
+
+    # Discord-Nachrichtenlimit berücksichtigen.
+    if len(content) > 1800:
+        raw = content.encode("utf-8")
+        file = discord.File(
+            io.BytesIO(raw),
+            filename=f"shadowpaw_knowledge_{guild.id}.json",
+        )
+        await channel.send(
+            f"{SHADOWPAW_DB_MARKER} FILE guild={guild.id}",
+            file=file,
+        )
+    else:
+        await channel.send(
+            f"{SHADOWPAW_DB_MARKER}\n```json\n{content}\n```"
+        )
+
+
+async def load_shadowpaw_knowledge_for_guild(guild: discord.Guild):
+    channel = discord.utils.get(guild.text_channels, name="ki-catnip-data")
+    if not channel:
+        _shadowpaw_guild_store(guild.id)
+        return
+
+    try:
+        async for msg in channel.history(limit=200):
+            if not msg.content.startswith(SHADOWPAW_DB_MARKER):
+                continue
+
+            if msg.attachments:
+                attachment = msg.attachments[0]
+                raw = await attachment.read()
+                payload = json.loads(raw.decode("utf-8"))
+            else:
+                raw = msg.content.split("\n", 1)[1]
+                raw = raw.replace("```json", "", 1)
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+                payload = json.loads(raw.strip())
+
+            if payload.get("marker") == SHADOWPAW_DB_MARKER:
+                shadowpaw_knowledge[str(guild.id)] = payload.get("entries", {})
+                return
+    except Exception as exc:
+        print(f"Schattenpfoten-Wissen konnte nicht geladen werden: {exc}")
+
+    _shadowpaw_guild_store(guild.id)
+
+
+def shadowpaw_context(guild_id: int, query: str, limit: int = 6) -> str:
+    entries = _shadowpaw_guild_store(guild_id)
+    if not entries:
+        return ""
+
+    words = {
+        word.lower()
+        for word in re.findall(r"[\wÄÖÜäöüß'-]+", query or "")
+        if len(word) >= 3
+    }
+
+    scored = []
+    for entry in entries.values():
+        haystack = " ".join([
+            entry.get("name", ""),
+            entry.get("category", ""),
+            entry.get("tags", ""),
+            entry.get("content", ""),
+        ]).lower()
+        score = sum(1 for word in words if word in haystack)
+        if score:
+            scored.append((score, entry))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    selected = [entry for _, entry in scored[:limit]]
+
+    if not selected:
+        return ""
+
+    blocks = []
+    for entry in selected:
+        blocks.append(
+            f"[Schattenpfoten-Lore | {entry.get('category', 'sonstiges')}]\n"
+            f"Name: {entry.get('name')}\n"
+            f"Inhalt: {entry.get('content')}\n"
+            f"Tags: {entry.get('tags') or '-'}"
+        )
+
+    return "\n\n".join(blocks)
+
+
+class ShadowpawKnowledgeModal(discord.ui.Modal, title="🐾 Wissen hinzufügen"):
+    entry_name = discord.ui.TextInput(
+        label="Name / Titel",
+        placeholder="z. B. Festung Nachtwacht",
+        max_length=100,
+    )
+    category = discord.ui.TextInput(
+        label="Kategorie",
+        placeholder="Charakter / Ort / Boss / Gegenstand / Fraktion / Ereignis",
+        default="Sonstiges",
+        max_length=30,
+    )
+    content = discord.ui.TextInput(
+        label="Beschreibung / Lore",
+        placeholder="Was soll KI-Catnip darüber wissen?",
+        style=discord.TextStyle.paragraph,
+        max_length=1800,
+    )
+    tags = discord.ui.TextInput(
+        label="Tags (optional)",
+        placeholder="z. B. Ishgard, Blutmond, Saga",
+        required=False,
+        max_length=200,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_bot_admin(interaction.user.id):
+            await interaction.response.send_message("🔒 Keine Berechtigung.", ephemeral=True)
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+            return
+
+        name = str(self.entry_name).strip()
+        key = _shadowpaw_entry_key(name)
+        store = _shadowpaw_guild_store(interaction.guild.id)
+
+        if key in store:
+            await interaction.response.send_message(
+                "⚠️ Ein Eintrag mit diesem Namen existiert bereits. "
+                "Nutze `/wissenbearbeiten` zum Ändern.",
+                ephemeral=True,
+            )
+            return
+
+        entry = {
+            "name": name,
+            "category": _shadowpaw_normalize_category(str(self.category)),
+            "content": str(self.content).strip(),
+            "tags": str(self.tags).strip(),
+            "author_id": interaction.user.id,
+            "author_name": interaction.user.display_name,
+        }
+        store[key] = entry
+
+        try:
+            await save_shadowpaw_knowledge(interaction.guild)
+        except Exception as exc:
+            store.pop(key, None)
+            await interaction.response.send_message(
+                f"❌ Speichern fehlgeschlagen: `{type(exc).__name__}`",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            content="✅ In der **Schattenpfoten-Wissensdatenbank** gespeichert.",
+            embed=_shadowpaw_entry_embed(entry),
+            ephemeral=True,
+        )
+
+
+class ShadowpawKnowledgeEditModal(discord.ui.Modal, title="✏️ Wissen bearbeiten"):
+    content = discord.ui.TextInput(
+        label="Neue Beschreibung / Lore",
+        style=discord.TextStyle.paragraph,
+        max_length=1800,
+    )
+    tags = discord.ui.TextInput(
+        label="Neue Tags (optional)",
+        required=False,
+        max_length=200,
+    )
+
+    def __init__(self, entry_key: str, entry: dict):
+        super().__init__()
+        self.entry_key = entry_key
+        self.content.default = entry.get("content", "")
+        self.tags.default = entry.get("tags", "")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_bot_admin(interaction.user.id):
+            await interaction.response.send_message("🔒 Keine Berechtigung.", ephemeral=True)
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+            return
+
+        store = _shadowpaw_guild_store(interaction.guild.id)
+        entry = store.get(self.entry_key)
+        if not entry:
+            await interaction.response.send_message(
+                "❌ Der Eintrag wurde nicht mehr gefunden.",
+                ephemeral=True,
+            )
+            return
+
+        old_content = entry.get("content", "")
+        old_tags = entry.get("tags", "")
+        entry["content"] = str(self.content).strip()
+        entry["tags"] = str(self.tags).strip()
+        entry["author_id"] = interaction.user.id
+        entry["author_name"] = interaction.user.display_name
+
+        try:
+            await save_shadowpaw_knowledge(interaction.guild)
+        except Exception as exc:
+            entry["content"] = old_content
+            entry["tags"] = old_tags
+            await interaction.response.send_message(
+                f"❌ Speichern fehlgeschlagen: `{type(exc).__name__}`",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            content="✅ Schattenpfoten-Wissen aktualisiert.",
+            embed=_shadowpaw_entry_embed(entry),
+            ephemeral=True,
+        )
+
+
+@client.tree.command(
+    name="wissen",
+    description="Sucht in der Schattenpfoten-Wissensdatenbank."
+)
+@app_commands.describe(suche="Name, Begriff oder Tag")
+async def wissen(interaction: discord.Interaction, suche: str):
+    if interaction.guild is None:
+        await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+        return
+
+    store = _shadowpaw_guild_store(interaction.guild.id)
+    query = suche.strip().lower()
+
+    exact = store.get(_shadowpaw_entry_key(suche))
+    if exact:
+        await interaction.response.send_message(
+            embed=_shadowpaw_entry_embed(exact),
+            ephemeral=True,
+        )
+        return
+
+    matches = []
+    for entry in store.values():
+        haystack = " ".join([
+            entry.get("name", ""),
+            entry.get("category", ""),
+            entry.get("tags", ""),
+            entry.get("content", ""),
+        ]).lower()
+        if query in haystack:
+            matches.append(entry)
+
+    if not matches:
+        await interaction.response.send_message(
+            f"🐾 Zu **{suche}** habe ich in der Schattenpfoten-Wissensdatenbank nichts gefunden.",
+            ephemeral=True,
+        )
+        return
+
+    embed = discord.Embed(
+        title="🐾 Schattenpfoten-Wissensdatenbank",
+        description=f"Treffer für **{suche}**",
+    )
+    for entry in matches[:10]:
+        emoji, cat_name = SHADOWPAW_CATEGORIES.get(
+            entry.get("category", "sonstiges"),
+            SHADOWPAW_CATEGORIES["sonstiges"],
+        )
+        excerpt = entry.get("content", "")
+        if len(excerpt) > 250:
+            excerpt = excerpt[:247] + "..."
+        embed.add_field(
+            name=f"{emoji} {entry.get('name')} — {cat_name}",
+            value=excerpt or "Keine Beschreibung",
+            inline=False,
+        )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@client.tree.command(
+    name="wissenhinzufuegen",
+    description="Admin: fügt der Schattenpfoten-Wissensdatenbank einen Eintrag hinzu."
+)
+async def wissenhinzufuegen(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("🔒 Keine Berechtigung.", ephemeral=True)
+        return
+    await interaction.response.send_modal(ShadowpawKnowledgeModal())
+
+
+@client.tree.command(
+    name="wissenbearbeiten",
+    description="Admin: bearbeitet einen Eintrag der Schattenpfoten-Wissensdatenbank."
+)
+@app_commands.describe(name="Exakter Name des Eintrags")
+async def wissenbearbeiten(interaction: discord.Interaction, name: str):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("🔒 Keine Berechtigung.", ephemeral=True)
+        return
+    if interaction.guild is None:
+        await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+        return
+
+    key = _shadowpaw_entry_key(name)
+    entry = _shadowpaw_guild_store(interaction.guild.id).get(key)
+    if not entry:
+        await interaction.response.send_message(
+            f"❌ Kein Eintrag namens **{name}** gefunden.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_modal(
+        ShadowpawKnowledgeEditModal(key, entry)
+    )
+
+
+@client.tree.command(
+    name="wissenloeschen",
+    description="Admin: löscht einen Eintrag aus der Schattenpfoten-Wissensdatenbank."
+)
+@app_commands.describe(name="Exakter Name des Eintrags", bestaetigung="Zum Löschen: LOESCHEN")
+async def wissenloeschen(
+    interaction: discord.Interaction,
+    name: str,
+    bestaetigung: str,
+):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("🔒 Keine Berechtigung.", ephemeral=True)
+        return
+    if interaction.guild is None:
+        await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+        return
+    if bestaetigung.strip().upper() not in {"LOESCHEN", "LÖSCHEN"}:
+        await interaction.response.send_message(
+            "⚠️ Abgebrochen. Gib bei `bestaetigung` **LOESCHEN** ein.",
+            ephemeral=True,
+        )
+        return
+
+    store = _shadowpaw_guild_store(interaction.guild.id)
+    key = _shadowpaw_entry_key(name)
+    entry = store.pop(key, None)
+    if not entry:
+        await interaction.response.send_message(
+            f"❌ Kein Eintrag namens **{name}** gefunden.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await save_shadowpaw_knowledge(interaction.guild)
+    except Exception as exc:
+        store[key] = entry
+        await interaction.response.send_message(
+            f"❌ Löschen konnte nicht gespeichert werden: `{type(exc).__name__}`",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        f"🗑️ **{entry['name']}** wurde aus der Schattenpfoten-Wissensdatenbank gelöscht.",
+        ephemeral=True,
+    )
+
+
+@client.tree.command(
+    name="wissensliste",
+    description="Zeigt die Einträge der Schattenpfoten-Wissensdatenbank."
+)
+@app_commands.describe(kategorie="Optional: Charakter, Ort, Boss, Gegenstand, Fraktion, Ereignis")
+async def wissensliste(interaction: discord.Interaction, kategorie: str = ""):
+    if interaction.guild is None:
+        await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+        return
+
+    store = _shadowpaw_guild_store(interaction.guild.id)
+    category_filter = _shadowpaw_normalize_category(kategorie) if kategorie.strip() else None
+
+    entries = [
+        entry for entry in store.values()
+        if category_filter is None or entry.get("category") == category_filter
+    ]
+    entries.sort(key=lambda e: e.get("name", "").lower())
+
+    if not entries:
+        await interaction.response.send_message(
+            "🐾 Die Schattenpfoten-Wissensdatenbank enthält dafür noch keine Einträge.",
+            ephemeral=True,
+        )
+        return
+
+    lines = []
+    for entry in entries[:40]:
+        emoji, cat_name = SHADOWPAW_CATEGORIES.get(
+            entry.get("category", "sonstiges"),
+            SHADOWPAW_CATEGORIES["sonstiges"],
+        )
+        lines.append(f"{emoji} **{entry.get('name')}** — {cat_name}")
+
+    if len(entries) > 40:
+        lines.append(f"\n… und {len(entries) - 40} weitere Einträge.")
+
+    embed = discord.Embed(
+        title="🐾 Schattenpfoten-Wissensdatenbank",
+        description="\n".join(lines),
+    )
+    embed.set_footer(text=f"{len(entries)} Einträge gefunden")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class ShadowpawAdminView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=900)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not is_bot_admin(interaction.user.id):
+            await interaction.response.send_message("🔒 Keine Berechtigung.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Wissen hinzufügen", emoji="➕", style=discord.ButtonStyle.success)
+    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ShadowpawKnowledgeModal())
+
+    @discord.ui.button(label="Übersicht", emoji="📚", style=discord.ButtonStyle.primary)
+    async def overview(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server.", ephemeral=True)
+            return
+        store = _shadowpaw_guild_store(interaction.guild.id)
+        counts = {key: 0 for key in SHADOWPAW_CATEGORIES}
+        for entry in store.values():
+            counts[entry.get("category", "sonstiges")] += 1
+        lines = []
+        for key, (emoji, label) in SHADOWPAW_CATEGORIES.items():
+            lines.append(f"{emoji} **{label}:** {counts[key]}")
+        await interaction.response.send_message(
+            "🐾 **Schattenpfoten-Wissensdatenbank**\n\n"
+            + "\n".join(lines)
+            + f"\n\n📚 **Gesamt:** {len(store)}",
+            ephemeral=True,
+        )
+
+
+@client.tree.command(
+    name="wissensadmin",
+    description="Admin-Menü der Schattenpfoten-Wissensdatenbank."
+)
+async def wissensadmin(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("🔒 Keine Berechtigung.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="🐾 Schattenpfoten-Wissensdatenbank",
+        description=(
+            "Eigene Charaktere, Orte, Bosse, Gegenstände, Fraktionen und "
+            "Ereignisse verwalten.\n\n"
+            "Dieses Wissen wird **getrennt von offizieller FFXIV-Lore** gespeichert."
+        ),
+    )
+    embed.add_field(
+        name="📚 Lesen",
+        value="`/wissen` · `/wissensliste`",
+        inline=False,
+    )
+    embed.add_field(
+        name="🛠️ Admin",
+        value="`/wissenhinzufuegen` · `/wissenbearbeiten` · `/wissenloeschen`",
+        inline=False,
+    )
+    await interaction.response.send_message(
+        embed=embed,
+        view=ShadowpawAdminView(),
+        ephemeral=True,
+    )
+
+
+
 @client.event
 async def on_ready():
+    for _guild in client.guilds:
+        await load_shadowpaw_knowledge_for_guild(_guild)
     for guild in client.guilds:
         await load_profiles_from_discord(guild)
     for guild in client.guilds:
@@ -5717,6 +6315,7 @@ async def on_ready():
     print(f"✓ RP-Spielleiter: Stufe 7.2 aktiv (/rp, /rpquest, /rpgruppe)")
     print(f"✓ Event-Anmeldung: Stufe 8.1 aktiv (/eventerstellen, Rollen-Buttons, /eventliste)")
     print(f"✓ Event-Admin-Dashboard aktiv (/eventadmin)")
+    print(f"✓ Schattenpfoten-Wissensdatenbank aktiv (/wissen, /wissensadmin)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
