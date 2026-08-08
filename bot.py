@@ -6294,6 +6294,509 @@ async def wissensadmin(interaction: discord.Interaction):
 
 
 
+# ============================================================
+# STUFE 10 — KI-CATNIP SYSTEMDIAGNOSE
+# ============================================================
+
+def _diag_icon(ok: bool, warn: bool = False) -> str:
+    if ok:
+        return "✅"
+    if warn:
+        return "⚠️"
+    return "❌"
+
+
+def _diag_line(label: str, status: str, detail: str = "") -> str:
+    return f"{status} **{label}**" + (f" — {detail}" if detail else "")
+
+
+def _diagnose_permissions(guild: discord.Guild):
+    me = guild.me
+    if me is None:
+        return [
+            _diag_line("Bot-Mitglied", "❌", "Bot-Mitglied konnte nicht aufgelöst werden.")
+        ]
+
+    perms = me.guild_permissions
+
+    checks = [
+        ("Kanäle ansehen", perms.view_channel),
+        ("Nachrichten senden", perms.send_messages),
+        ("Nachrichtenverlauf lesen", perms.read_message_history),
+        ("Kanäle verwalten", perms.manage_channels),
+        ("Nachrichten verwalten", perms.manage_messages),
+        ("Rollen verwalten", perms.manage_roles),
+        ("Dateien anhängen", perms.attach_files),
+        ("Links einbetten", perms.embed_links),
+    ]
+
+    lines = []
+    for label, ok in checks:
+        lines.append(
+            _diag_line(
+                label,
+                "✅" if ok else "❌",
+                "vorhanden" if ok else "fehlt",
+            )
+        )
+
+    if perms.administrator:
+        lines.append(
+            _diag_line(
+                "Administrator",
+                "✅",
+                "aktiv — dadurch sind praktisch alle Serverrechte abgedeckt",
+            )
+        )
+    else:
+        lines.append(
+            _diag_line(
+                "Administrator",
+                "⚠️",
+                "nicht aktiv — okay, wenn die Einzelrechte korrekt gesetzt sind",
+            )
+        )
+
+    return lines
+
+
+def _diagnose_config():
+    lines = []
+
+    lines.append(
+        _diag_line(
+            "Discord Token",
+            "✅" if bool(DISCORD_TOKEN) else "❌",
+            "gesetzt" if DISCORD_TOKEN else "fehlt",
+        )
+    )
+    lines.append(
+        _diag_line(
+            "Gemini API Key",
+            "✅" if bool(GEMINI_API_KEY) else "❌",
+            "gesetzt" if GEMINI_API_KEY else "fehlt",
+        )
+    )
+    lines.append(
+        _diag_line(
+            "Gemini Modell",
+            "✅" if bool(GEMINI_MODEL) else "❌",
+            GEMINI_MODEL or "nicht gesetzt",
+        )
+    )
+    lines.append(
+        _diag_line(
+            "Gemini Free Tier",
+            "✅" if GEMINI_FREE_TIER else "⚠️",
+            "aktiv" if GEMINI_FREE_TIER else "nicht aktiv",
+        )
+    )
+    lines.append(
+        _diag_line(
+            "Websuche",
+            "✅" if WEB_SEARCH else "⚠️",
+            "aktiv" if WEB_SEARCH else "deaktiviert",
+        )
+    )
+
+    return lines
+
+
+def _diagnose_intents():
+    intents = client.intents
+    return [
+        _diag_line(
+            "Message Content Intent",
+            "✅" if intents.message_content else "❌",
+            "aktiv" if intents.message_content else "deaktiviert",
+        ),
+        _diag_line(
+            "Server Members Intent",
+            "✅" if intents.members else "❌",
+            "aktiv" if intents.members else "deaktiviert",
+        ),
+    ]
+
+
+def _diagnose_data(guild: discord.Guild):
+    lines = []
+
+    data_channel = discord.utils.get(
+        guild.text_channels,
+        name=PROFILE_DATA_CHANNEL_NAME,
+    )
+
+    lines.append(
+        _diag_line(
+            "Datenchannel",
+            "✅" if data_channel else "❌",
+            f"#{PROFILE_DATA_CHANNEL_NAME} vorhanden"
+            if data_channel
+            else f"#{PROFILE_DATA_CHANNEL_NAME} fehlt",
+        )
+    )
+
+    lines.append(
+        _diag_line(
+            "Spielerprofile",
+            "✅",
+            f"{len(player_profiles)} Profil(e) im Speicher",
+        )
+    )
+
+    shadowpaw_store = _shadowpaw_guild_store(guild.id)
+    lines.append(
+        _diag_line(
+            "Schattenpfoten-Wissensdatenbank",
+            "✅",
+            f"{len(shadowpaw_store)} Eintrag/Einträge geladen",
+        )
+    )
+
+    return lines
+
+
+def _diagnose_features(guild: discord.Guild, channel_id: int):
+    key = (guild.id, channel_id)
+
+    lines = [
+        _diag_line(
+            "Private Channels",
+            "✅" if PRIVATE_CHANNELS_ENABLED else "⚠️",
+            "aktiv" if PRIVATE_CHANNELS_ENABLED else "deaktiviert",
+        ),
+        _diag_line(
+            "Rückkehr-Begrüßung",
+            "✅" if RETURN_GREETING_ENABLED else "⚠️",
+            "aktiv" if RETURN_GREETING_ENABLED else "deaktiviert",
+        ),
+        _diag_line(
+            "Persönlicher Spoilerschutz",
+            "✅",
+            "verfügbar über /fortschritt und /spoiler",
+        ),
+        _diag_line(
+            "Event-Anmeldung",
+            "✅",
+            "aktiv" if key in active_event_signups else "bereit",
+        ),
+        _diag_line(
+            "Rätsel-System",
+            "✅",
+            "aktiv" if key in active_riddle_events else "bereit",
+        ),
+        _diag_line(
+            "Boss-System",
+            "✅",
+            "aktiv" if key in active_boss_battles else "bereit",
+        ),
+        _diag_line(
+            "Bossgruppe",
+            "✅",
+            "vorhanden"
+            if key in boss_party_lobbies
+            and boss_party_lobbies[key].get("players")
+            else "bereit",
+        ),
+        _diag_line(
+            "RP-System",
+            "✅",
+            "bereit",
+        ),
+        _diag_line(
+            "Event-Admin-Dashboard",
+            "✅",
+            "bereit über /eventadmin",
+        ),
+    ]
+
+    return lines
+
+
+def _diagnose_commands():
+    try:
+        commands = client.tree.get_commands()
+        return [
+            _diag_line(
+                "Slash-Commands",
+                "✅" if commands else "❌",
+                f"{len(commands)} lokal registriert",
+            )
+        ]
+    except Exception as exc:
+        return [
+            _diag_line(
+                "Slash-Commands",
+                "❌",
+                f"{type(exc).__name__}",
+            )
+        ]
+
+
+def diagnose_embed(interaction: discord.Interaction) -> discord.Embed:
+    guild = interaction.guild
+
+    embed = discord.Embed(
+        title="🔧 KI-Catnip — Systemdiagnose",
+        description=(
+            "Technischer Schnellcheck der wichtigsten KI-Catnip-Systeme.\n"
+            "✅ OK · ⚠️ Hinweis · ❌ Problem"
+        ),
+    )
+
+    if guild is None:
+        embed.add_field(
+            name="❌ Server",
+            value="Die Diagnose muss auf einem Discord-Server ausgeführt werden.",
+            inline=False,
+        )
+        return embed
+
+    sections = [
+        ("🤖 Konfiguration", _diagnose_config()),
+        ("📡 Discord Intents", _diagnose_intents()),
+        ("🛡️ Discord-Berechtigungen", _diagnose_permissions(guild)),
+        ("💾 Daten & Wissen", _diagnose_data(guild)),
+        ("⚙️ Systeme", _diagnose_features(guild, interaction.channel_id)),
+        ("⌨️ Commands", _diagnose_commands()),
+    ]
+
+    for title, lines in sections:
+        value = "\n".join(lines)
+        if len(value) > 1024:
+            value = value[:1021] + "..."
+        embed.add_field(
+            name=title,
+            value=value,
+            inline=False,
+        )
+
+    embed.set_footer(
+        text="Stufe 10 • Keine geheimen Tokens oder API-Keys werden angezeigt"
+    )
+    return embed
+
+
+async def _run_real_gemini_diagnostic():
+    """
+    Führt eine minimale echte API-Anfrage aus.
+    Kein FFXIV-Prompt, keine Websuche, extrem kleine Antwort.
+    """
+    response = await ai.aio.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(
+                        text="Antworte ausschließlich mit dem Wort OK."
+                    )
+                ],
+            )
+        ],
+        config=types.GenerateContentConfig(
+            temperature=0,
+            max_output_tokens=10,
+        ),
+    )
+
+    answer = (response.text or "").strip()
+    return answer
+
+
+class DiagnoseView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=600)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not is_bot_admin(interaction.user.id):
+            await interaction.response.send_message(
+                "🔒 Die Systemdiagnose ist nur für freigeschaltete KI-Catnip-Administratoren verfügbar.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(
+        label="Neu prüfen",
+        emoji="🔄",
+        style=discord.ButtonStyle.primary,
+        row=0,
+    )
+    async def refresh(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.edit_message(
+            embed=diagnose_embed(interaction),
+            view=self,
+        )
+
+    @discord.ui.button(
+        label="Gemini live testen",
+        emoji="🧠",
+        style=discord.ButtonStyle.success,
+        row=0,
+    )
+    async def gemini_test(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        try:
+            answer = await _run_real_gemini_diagnostic()
+            if answer:
+                await interaction.followup.send(
+                    f"✅ **Gemini-Livetest erfolgreich.**\n"
+                    f"Modell: `{GEMINI_MODEL}`\n"
+                    f"Antwort erhalten: `{answer[:50]}`",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    "⚠️ Gemini hat geantwortet, aber keinen Text geliefert.",
+                    ephemeral=True,
+                )
+        except Exception as exc:
+            await interaction.followup.send(
+                f"❌ **Gemini-Livetest fehlgeschlagen.**\n"
+                f"`{type(exc).__name__}: {str(exc)[:500]}`",
+                ephemeral=True,
+            )
+
+    @discord.ui.button(
+        label="Daten prüfen",
+        emoji="💾",
+        style=discord.ButtonStyle.secondary,
+        row=0,
+    )
+    async def data_test(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "❌ Nur auf einem Server verfügbar.",
+                ephemeral=True,
+            )
+            return
+
+        data_channel = discord.utils.get(
+            interaction.guild.text_channels,
+            name=PROFILE_DATA_CHANNEL_NAME,
+        )
+
+        if data_channel is None:
+            await interaction.response.send_message(
+                f"❌ Datenchannel `#{PROFILE_DATA_CHANNEL_NAME}` wurde nicht gefunden.",
+                ephemeral=True,
+            )
+            return
+
+        perms = data_channel.permissions_for(interaction.guild.me)
+
+        lines = [
+            _diag_line(
+                "Channel sichtbar",
+                "✅" if perms.view_channel else "❌",
+            ),
+            _diag_line(
+                "Nachrichten senden",
+                "✅" if perms.send_messages else "❌",
+            ),
+            _diag_line(
+                "Verlauf lesen",
+                "✅" if perms.read_message_history else "❌",
+            ),
+            _diag_line(
+                "Nachrichten verwalten",
+                "✅" if perms.manage_messages else "⚠️",
+            ),
+            _diag_line(
+                "Spielerprofile geladen",
+                "✅",
+                str(len(player_profiles)),
+            ),
+            _diag_line(
+                "Schattenpfoten-Einträge",
+                "✅",
+                str(len(_shadowpaw_guild_store(interaction.guild.id))),
+            ),
+        ]
+
+        await interaction.response.send_message(
+            "💾 **KI-Catnip Datenprüfung**\n\n" + "\n".join(lines),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="Admin-IDs prüfen",
+        emoji="👑",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+    )
+    async def admins_test(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "❌ Nur auf einem Server verfügbar.",
+                ephemeral=True,
+            )
+            return
+
+        lines = []
+        for uid in sorted(EVENT_ADMIN_USER_IDS):
+            member = interaction.guild.get_member(uid)
+            if member:
+                lines.append(
+                    f"✅ **{member.display_name}** (`{uid}`)"
+                )
+            else:
+                lines.append(
+                    f"⚠️ `{uid}` — aktuell nicht im Servercache"
+                )
+
+        await interaction.response.send_message(
+            "👑 **Freigeschaltete KI-Catnip-Admins**\n\n"
+            + "\n".join(lines),
+            ephemeral=True,
+        )
+
+
+@client.tree.command(
+    name="diagnose",
+    description="Admin: prüft die wichtigsten KI-Catnip-Systeme."
+)
+async def diagnose(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Die Systemdiagnose ist nur für freigeschaltete KI-Catnip-Administratoren verfügbar.",
+            ephemeral=True,
+        )
+        return
+
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ Die Diagnose muss auf einem Discord-Server ausgeführt werden.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        embed=diagnose_embed(interaction),
+        view=DiagnoseView(),
+        ephemeral=True,
+    )
+
+
+
 @client.event
 async def on_ready():
     for _guild in client.guilds:
@@ -6316,6 +6819,7 @@ async def on_ready():
     print(f"✓ Event-Anmeldung: Stufe 8.1 aktiv (/eventerstellen, Rollen-Buttons, /eventliste)")
     print(f"✓ Event-Admin-Dashboard aktiv (/eventadmin)")
     print(f"✓ Schattenpfoten-Wissensdatenbank aktiv (/wissen, /wissensadmin)")
+    print(f"✓ Systemdiagnose: Stufe 10 aktiv (/diagnose)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
