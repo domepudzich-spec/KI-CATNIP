@@ -5207,6 +5207,497 @@ async def catnip_info(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+# ============================================================
+# EVENT-ADMIN-DASHBOARD
+# ============================================================
+
+def event_admin_overview_embed(interaction: discord.Interaction) -> discord.Embed:
+    guild_id = interaction.guild.id if interaction.guild else 0
+    channel_id = interaction.channel_id
+    key = (guild_id, channel_id)
+
+    signup = active_event_signups.get(key)
+    riddle = active_riddle_events.get(key)
+    boss = active_boss_battles.get(key)
+    lobby = boss_party_lobbies.get(key)
+
+    embed = discord.Embed(
+        title="🎛️ KI-Catnip — Event-Admin-Zentrale",
+        description=(
+            "Hier findest du die wichtigsten Event-Werkzeuge an einem Ort. "
+            "Die Buttons starten oder verwalten die Systeme direkt im aktuellen Channel."
+        ),
+    )
+
+    embed.add_field(
+        name="📅 Event-Anmeldung",
+        value=(
+            "`/eventerstellen` · `/eventstatus` · `/eventliste` · `/eventbeenden`\n"
+            + ("🟢 Anmeldung läuft" if signup else "⚪ Keine aktive Anmeldung")
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🧩 Rätsel-Events",
+        value=(
+            "`/raetselevent` · `/raetselantwort` · `/raetselhinweis` · "
+            "`/raetselloesung` · `/raetselstatus` · `/raetselstop`\n"
+            + ("🟢 Rätsel-Event läuft" if riddle else "⚪ Kein aktives Rätsel-Event")
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="⚔️ Bosskämpfe",
+        value=(
+            "`/bossgruppe` · `/bossstart` · `/bossstatus` · `/bossstop`\n"
+            + ("🟢 Bosskampf läuft" if boss else "⚪ Kein aktiver Bosskampf")
+            + (" · 👥 Gruppe vorhanden" if lobby and lobby.get("players") else "")
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🏆 Event-Profile",
+        value=(
+            "`/profil` · `/rangliste` · `/belohnungen` · `/punkte`\n"
+            "Rätsel- und Bossbelohnungen werden weiterhin automatisch gespeichert."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🐾 Direktsteuerung",
+        value=(
+            "Über die Buttons unten kannst du **Anmeldungen, Rätsel und Bosskämpfe "
+            "direkt erstellen** oder den aktuellen Eventstatus prüfen."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Nur für freigeschaltete KI-Catnip-Administratoren")
+    return embed
+
+
+class EventCreateModal(discord.ui.Modal, title="📅 Event-Anmeldung erstellen"):
+    event_title = discord.ui.TextInput(
+        label="Eventtitel",
+        placeholder="z. B. Schattenflauscher Prüfungsabend",
+        max_length=100,
+    )
+    when = discord.ui.TextInput(
+        label="Termin",
+        placeholder="z. B. Samstag 20:00 Uhr",
+        max_length=100,
+    )
+    description = discord.ui.TextInput(
+        label="Beschreibung",
+        placeholder="Kurze Beschreibung des Events",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=700,
+    )
+    max_players = discord.ui.TextInput(
+        label="Max. aktive Spieler",
+        placeholder="8",
+        default="8",
+        max_length=2,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_bot_admin(interaction.user.id):
+            await interaction.response.send_message("🔒 Keine Berechtigung.", ephemeral=True)
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+            return
+
+        try:
+            max_count = int(str(self.max_players).strip())
+            if max_count < 0 or max_count > 50:
+                raise ValueError
+        except ValueError:
+            await interaction.response.send_message(
+                "⚠️ Max. Spieler muss eine Zahl zwischen 0 und 50 sein.",
+                ephemeral=True,
+            )
+            return
+
+        key = _event_key(interaction.guild.id, interaction.channel_id)
+        if key in active_event_signups:
+            await interaction.response.send_message(
+                "⚠️ In diesem Channel läuft bereits eine Event-Anmeldung.",
+                ephemeral=True,
+            )
+            return
+
+        state = {
+            "title": str(self.event_title).strip(),
+            "when": str(self.when).strip(),
+            "description": str(self.description).strip(),
+            "max_players": max_count,
+            "creator_id": interaction.user.id,
+            "creator_name": interaction.user.display_name,
+            "signups": {},
+        }
+        active_event_signups[key] = state
+
+        await interaction.response.send_message(
+            embed=event_signup_embed(state),
+            view=EventSignupView(),
+        )
+
+
+class RiddleCreateModal(discord.ui.Modal, title="🧩 Rätsel-Event starten"):
+    theme = discord.ui.TextInput(
+        label="Thema",
+        placeholder="z. B. Verfluchte Ruinen unter Gridania",
+        max_length=120,
+    )
+    stations = discord.ui.TextInput(
+        label="Stationen (1–5)",
+        placeholder="3",
+        default="3",
+        max_length=1,
+    )
+    difficulty = discord.ui.TextInput(
+        label="Schwierigkeit",
+        placeholder="Leicht / Mittel / Schwer / Extrem",
+        default="Mittel",
+        max_length=10,
+    )
+    endboss = discord.ui.TextInput(
+        label="Endboss",
+        placeholder="Keiner / Ifrit / Titan / Jupiter",
+        default="Keiner",
+        max_length=20,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_bot_admin(interaction.user.id):
+            await interaction.response.send_message("🔒 Keine Berechtigung.", ephemeral=True)
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+            return
+
+        try:
+            count = int(str(self.stations).strip())
+            if count < 1 or count > 5:
+                raise ValueError
+        except ValueError:
+            await interaction.response.send_message(
+                "⚠️ Stationen muss zwischen 1 und 5 liegen.",
+                ephemeral=True,
+            )
+            return
+
+        difficulty = str(self.difficulty).strip().capitalize()
+        if difficulty not in {"Leicht", "Mittel", "Schwer", "Extrem"}:
+            await interaction.response.send_message(
+                "⚠️ Schwierigkeit: Leicht, Mittel, Schwer oder Extrem.",
+                ephemeral=True,
+            )
+            return
+
+        boss_raw = str(self.endboss).strip().lower()
+        boss_map = {
+            "keiner": "none",
+            "kein": "none",
+            "none": "none",
+            "ifrit": "Ifrit",
+            "titan": "Titan",
+            "jupiter": "Jupiter",
+        }
+        boss_name = boss_map.get(boss_raw)
+        if boss_name is None:
+            await interaction.response.send_message(
+                "⚠️ Endboss muss Keiner, Ifrit, Titan oder Jupiter sein.",
+                ephemeral=True,
+            )
+            return
+
+        key = _riddle_key(interaction.guild.id, interaction.channel_id)
+        if key in active_riddle_events:
+            await interaction.response.send_message(
+                "⚠️ In diesem Channel läuft bereits ein Rätsel-Event.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(thinking=True)
+
+        theme = str(self.theme).strip()
+        stations = await generate_ai_riddle_stations(
+            interaction.channel_id,
+            interaction.user.display_name,
+            theme,
+            count,
+            difficulty,
+        )
+        used_source = "KI-generiert"
+
+        if not stations:
+            stations = _fallback_riddle_stations(theme, min(count, 3))
+            used_source = "Preset-Fallback"
+
+        state = {
+            "theme": theme,
+            "stations": stations,
+            "index": 0,
+            "score": 0,
+            "wrong": 0,
+            "hints_used_current": 0,
+            "solved_by": [],
+            "solver_ids": {},
+            "source": used_source,
+            "difficulty": difficulty,
+            "endboss": boss_name,
+        }
+        active_riddle_events[key] = state
+
+        boss_text = boss_name if boss_name != "none" else "Keiner"
+        await interaction.followup.send(
+            embed=riddle_event_embed(
+                state,
+                message=(
+                    f"🧩 **{theme}** beginnt!\n"
+                    f"Quelle: **{used_source}** • Schwierigkeit: **{difficulty}** "
+                    f"• Endboss: **{boss_text}**"
+                ),
+            )
+        )
+
+
+class BossStartModal(discord.ui.Modal, title="⚔️ Bosskampf starten"):
+    boss = discord.ui.TextInput(
+        label="Boss",
+        placeholder="Ifrit / Titan / Jupiter",
+        default="Jupiter",
+        max_length=20,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_bot_admin(interaction.user.id):
+            await interaction.response.send_message("🔒 Keine Berechtigung.", ephemeral=True)
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+            return
+
+        boss_map = {
+            "ifrit": "Ifrit",
+            "titan": "Titan",
+            "jupiter": "Jupiter",
+        }
+        boss_name = boss_map.get(str(self.boss).strip().lower())
+
+        if not boss_name:
+            await interaction.response.send_message(
+                "⚠️ Verfügbare Bosse: Ifrit, Titan oder Jupiter.",
+                ephemeral=True,
+            )
+            return
+
+        key = _boss_key(interaction.guild.id, interaction.channel_id)
+        if key in active_boss_battles:
+            await interaction.response.send_message(
+                "⚠️ In diesem Channel läuft bereits ein Bosskampf.",
+                ephemeral=True,
+            )
+            return
+
+        template = BOSS_TEMPLATES[boss_name]
+        state = {
+            "name": boss_name,
+            "hp": template["max_hp"],
+            "max_hp": template["max_hp"],
+            "party_hp": template["party_hp"],
+            "party_max_hp": template["party_hp"],
+            "wrong_damage": template["wrong_damage"],
+            "phase": 0,
+            "phases": template["phases"],
+            "correct": 0,
+            "wrong": 0,
+            "answered_users": set(),
+            "players": {},
+        }
+
+        lobby = boss_party_lobbies.get(key)
+        if lobby and lobby["players"]:
+            state["players"] = {
+                uid: dict(data) for uid, data in lobby["players"].items()
+            }
+            state["party_max_hp"] = sum(p["max_hp"] for p in state["players"].values())
+            state["party_hp"] = sum(p["hp"] for p in state["players"].values())
+
+        active_boss_battles[key] = state
+
+        await interaction.response.send_message(
+            embed=boss_embed(
+                state,
+                message=f"⚔️ **{boss_name}** betritt die Arena! Die Antwortbuttons sind bereit.",
+            ),
+            view=BossCombatView(),
+        )
+
+
+class EventManageView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=600)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not is_bot_admin(interaction.user.id):
+            await interaction.response.send_message(
+                "🔒 Dieses Menü ist nur für freigeschaltete Event-Admins.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Anmeldung schließen", emoji="📅", style=discord.ButtonStyle.secondary)
+    async def close_signup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server.", ephemeral=True)
+            return
+        state = active_event_signups.pop(
+            _event_key(interaction.guild.id, interaction.channel_id), None
+        )
+        await interaction.response.send_message(
+            "✅ Event-Anmeldung geschlossen." if state else "ℹ️ Keine aktive Event-Anmeldung.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Rätsel stoppen", emoji="🧩", style=discord.ButtonStyle.secondary)
+    async def stop_riddle(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server.", ephemeral=True)
+            return
+        state = active_riddle_events.pop(
+            _riddle_key(interaction.guild.id, interaction.channel_id), None
+        )
+        await interaction.response.send_message(
+            "✅ Rätsel-Event beendet." if state else "ℹ️ Kein aktives Rätsel-Event.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Boss stoppen", emoji="⚔️", style=discord.ButtonStyle.danger)
+    async def stop_boss(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server.", ephemeral=True)
+            return
+        state = active_boss_battles.pop(
+            _boss_key(interaction.guild.id, interaction.channel_id), None
+        )
+        await interaction.response.send_message(
+            "✅ Bosskampf beendet." if state else "ℹ️ Kein aktiver Bosskampf.",
+            ephemeral=True,
+        )
+
+
+class EventAdminDashboard(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=900)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not is_bot_admin(interaction.user.id):
+            await interaction.response.send_message(
+                "🔒 Dieses Dashboard ist nur für freigeschaltete Event-Admins.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Event erstellen", emoji="📅", style=discord.ButtonStyle.primary, row=0)
+    async def create_event(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(EventCreateModal())
+
+    @discord.ui.button(label="Rätsel starten", emoji="🧩", style=discord.ButtonStyle.primary, row=0)
+    async def create_riddle(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RiddleCreateModal())
+
+    @discord.ui.button(label="Bossgruppe", emoji="👥", style=discord.ButtonStyle.secondary, row=0)
+    async def create_party(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server.", ephemeral=True)
+            return
+        key = _party_lobby_key(interaction.guild.id, interaction.channel_id)
+        lobby = {"players": {}}
+        boss_party_lobbies[key] = lobby
+        await interaction.response.send_message(
+            embed=party_lobby_embed(lobby),
+            view=BossPartyView(),
+        )
+
+    @discord.ui.button(label="Boss starten", emoji="⚔️", style=discord.ButtonStyle.danger, row=0)
+    async def create_boss(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(BossStartModal())
+
+    @discord.ui.button(label="Status aktualisieren", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=event_admin_overview_embed(interaction),
+            view=self,
+        )
+
+    @discord.ui.button(label="Teilnehmerliste", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
+    async def participant_list(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message("Nur auf einem Server.", ephemeral=True)
+            return
+
+        state = active_event_signups.get(
+            _event_key(interaction.guild.id, interaction.channel_id)
+        )
+        if not state:
+            await interaction.response.send_message(
+                "📅 In diesem Channel läuft keine Event-Anmeldung.",
+                ephemeral=True,
+            )
+            return
+
+        lines = []
+        for role in ("Tank", "Heiler", "DPS", "Dabei", "Ersatzbank"):
+            members = [
+                f"<@{uid}>"
+                for uid, data in state["signups"].items()
+                if data.get("role") == role
+            ]
+            lines.append(
+                f"{EVENT_ROLE_ICONS[role]} **{role}:** "
+                + (", ".join(members) if members else "—")
+            )
+
+        await interaction.response.send_message(
+            f"📋 **Teilnehmerliste — {state['title']}**\n\n" + "\n".join(lines),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Verwalten / Stoppen", emoji="🛠️", style=discord.ButtonStyle.secondary, row=1)
+    async def manage(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "🛠️ **Aktive Eventsysteme verwalten**",
+            view=EventManageView(),
+            ephemeral=True,
+        )
+
+
+@client.tree.command(
+    name="eventadmin",
+    description="Öffnet die Event-Admin-Zentrale von KI-Catnip."
+)
+async def eventadmin(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Diese Event-Zentrale ist nur für freigeschaltete KI-Catnip-Administratoren verfügbar.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        embed=event_admin_overview_embed(interaction),
+        view=EventAdminDashboard(),
+        ephemeral=True,
+    )
+
+
+
 @client.event
 async def on_ready():
     for guild in client.guilds:
@@ -5225,6 +5716,7 @@ async def on_ready():
     print(f"✓ Charakterprofile: Stufe 7.1 aktiv (/charaktererstellen, /charakterprofil, /charakterbearbeiten)")
     print(f"✓ RP-Spielleiter: Stufe 7.2 aktiv (/rp, /rpquest, /rpgruppe)")
     print(f"✓ Event-Anmeldung: Stufe 8.1 aktiv (/eventerstellen, Rollen-Buttons, /eventliste)")
+    print(f"✓ Event-Admin-Dashboard aktiv (/eventadmin)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
