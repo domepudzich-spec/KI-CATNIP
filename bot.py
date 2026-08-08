@@ -1797,6 +1797,125 @@ async def reset(interaction: discord.Interaction):
     )
 
 
+
+# ===========================================================================
+# ADMIN-DASHBOARD
+# ===========================================================================
+
+
+def is_bot_admin(user_id: int) -> bool:
+    """Bot-Admin oder freigeschalteter Event-Admin."""
+    return user_id == BUDGET_ADMIN_USER_ID or user_id in EVENT_ADMIN_USER_IDS
+
+
+def admin_status_embed(channel_id: int) -> discord.Embed:
+    data = load_budget()
+    embed = discord.Embed(
+        title=f"🛠️ {BOT_NAME} — Admin-Menü",
+        description=(
+            "Zentrale Übersicht für KI-Catnip. Die Schalter gelten nur bis zum "
+            "nächsten Bot-Neustart; dauerhafte Standardwerte bleiben die Railway-Variablen."
+        ),
+    )
+    embed.add_field(name="🤖 Bot", value="🟢 Online", inline=True)
+    embed.add_field(name="🧠 Modell", value=f"`{GEMINI_MODEL}`", inline=True)
+    embed.add_field(
+        name="🌐 Websuche",
+        value="🟢 Aktiv" if WEB_SEARCH else "🔴 Deaktiviert",
+        inline=True,
+    )
+    embed.add_field(
+        name="🔒 Spoilerschutz (dieser Channel)",
+        value="🔓 Spoiler erlaubt" if channel_id in spoiler_enabled_channels else "🔒 Aktiv",
+        inline=True,
+    )
+    embed.add_field(
+        name="💬 Private Channels",
+        value="🟢 Aktiv" if PRIVATE_CHANNELS_ENABLED else "🔴 Deaktiviert",
+        inline=True,
+    )
+    embed.add_field(
+        name="🎭 Event-System",
+        value=f"🟢 Aktiv · {len(EVENT_ADMIN_USER_IDS)} Admin(s)",
+        inline=True,
+    )
+    if GEMINI_FREE_TIER:
+        budget_value = (
+            f"🆓 Free Tier · {data.get('requests', 0)} Anfrage(n) · "
+            f"{data.get('web_search_calls', 0)} Suche(n)"
+        )
+    else:
+        spent = float(data.get("estimated_eur", 0.0))
+        budget_value = f"{spent:.2f} € / {MONTHLY_BUDGET_EUR:.2f} €"
+    embed.add_field(name="💶 API-Nutzung", value=budget_value, inline=False)
+    embed.set_footer(text="Nur für freigeschaltete KI-Catnip-Administratoren sichtbar.")
+    return embed
+
+
+class AdminView(discord.ui.View):
+    def __init__(self, channel_id: int):
+        super().__init__(timeout=300)
+        self.channel_id = channel_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if is_bot_admin(interaction.user.id):
+            return True
+        await interaction.response.send_message(
+            "🔒 Dieses Menü ist nur für freigeschaltete KI-Catnip-Administratoren verfügbar.",
+            ephemeral=True,
+        )
+        return False
+
+    async def refresh(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            embed=admin_status_embed(self.channel_id), view=self
+        )
+
+    @discord.ui.button(label="Aktualisieren", emoji="🔄", style=discord.ButtonStyle.secondary)
+    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.refresh(interaction)
+
+    @discord.ui.button(label="Spoiler umschalten", emoji="🔒", style=discord.ButtonStyle.primary)
+    async def spoiler_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.channel_id in spoiler_enabled_channels:
+            spoiler_enabled_channels.discard(self.channel_id)
+        else:
+            spoiler_enabled_channels.add(self.channel_id)
+        await self.refresh(interaction)
+
+    @discord.ui.button(label="Websuche umschalten", emoji="🌐", style=discord.ButtonStyle.primary)
+    async def web_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        global WEB_SEARCH
+        WEB_SEARCH = not WEB_SEARCH
+        await self.refresh(interaction)
+
+    @discord.ui.button(label="Private Channels umschalten", emoji="💬", style=discord.ButtonStyle.primary)
+    async def private_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        global PRIVATE_CHANNELS_ENABLED
+        PRIVATE_CHANNELS_ENABLED = not PRIVATE_CHANNELS_ENABLED
+        await self.refresh(interaction)
+
+    @discord.ui.button(label="Budgetdetails", emoji="💶", style=discord.ButtonStyle.secondary)
+    async def budget_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(budget_status_text(), ephemeral=True)
+
+
+@client.tree.command(name="admin", description="Öffnet das private KI-Catnip Admin-Menü.")
+async def admin(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Dieser Befehl ist nur für freigeschaltete KI-Catnip-Administratoren verfügbar.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        embed=admin_status_embed(interaction.channel_id),
+        view=AdminView(interaction.channel_id),
+        ephemeral=True,
+    )
+
+
 @client.tree.command(name="botinfo", description="Zeigt die Funktionen der Eorzea-Enzyklopädie.")
 async def botinfo(interaction: discord.Interaction):
     embed = discord.Embed(
