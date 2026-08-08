@@ -2191,6 +2191,220 @@ async def botinfo(interaction: discord.Interaction):
 
 
 
+
+# ============================================================
+# STUFE 4 — INTERAKTIVE BOSSKÄMPFE
+# ============================================================
+
+BOSS_TEMPLATES = {
+    "Ifrit": {
+        "max_hp": 100,
+        "phases": [
+            ("Phase 1 — Glut", "Ifrit sammelt sengende Hitze. Welche Rolle sollte den Boss normalerweise frontal halten?", "tank"),
+            ("Phase 2 — Eruption", "Eine große AoE erscheint unter euch. Was ist die beste Reaktion?", "raus"),
+            ("Phase 3 — Inferno", "Der Boss bereitet starken Gruppenschaden vor. Welche Rolle hält die Gruppe besonders am Leben?", "heiler"),
+        ],
+    },
+    "Titan": {
+        "max_hp": 120,
+        "phases": [
+            ("Phase 1 — Gewicht des Landes", "Gefährliche Bodenflächen erscheinen. Was tut ihr?", "raus"),
+            ("Phase 2 — Bergsturz", "Titan richtet einen schweren Angriff auf sein Hauptziel. Welche Rolle sollte ihn halten?", "tank"),
+            ("Phase 3 — Erderschütterung", "Die ganze Gruppe erleidet Schaden. Wer reagiert besonders mit Gruppenheilung?", "heiler"),
+        ],
+    },
+    "Jupiter": {
+        "max_hp": 150,
+        "phases": [
+            ("Phase 1 — Erwachen des Machtpatrons", "Jupiter markiert große Flächen der Arena. Was hat Vorrang?", "raus"),
+            ("Phase 2 — Herrschaft der Sterne", "Ein schwerer Einzelangriff trifft das Hauptziel. Welche Rolle fängt ihn ab?", "tank"),
+            ("Phase 3 — Jupiter, der Zerstörer", "Massiver Gruppenschaden steht bevor. Welche Rolle stabilisiert die Gruppe?", "heiler"),
+            ("Phase 4 — ENRAGE", "Letzte Chance: Was ist jetzt das wichtigste Ziel der Gruppe?", "schaden"),
+        ],
+    },
+}
+
+active_boss_battles = {}
+
+def _boss_key(guild_id: int, channel_id: int):
+    return (guild_id, channel_id)
+
+def _normalize_boss_answer(value: str) -> str:
+    value = (value or "").strip().lower()
+    aliases = {
+        "tank": {"tank", "tanken", "verteidiger"},
+        "heiler": {"heiler", "heal", "healing", "heilen"},
+        "raus": {"raus", "ausweichen", "weg", "aoe verlassen", "laufen"},
+        "schaden": {"schaden", "dps", "damage", "angreifen", "burst"},
+    }
+    for canonical, words in aliases.items():
+        if value in words:
+            return canonical
+    return value
+
+def boss_embed(state: dict, *, message: str | None = None) -> discord.Embed:
+    hp = max(0, state["hp"])
+    max_hp = state["max_hp"]
+    pct = int((hp / max_hp) * 100) if max_hp else 0
+    bars = 10
+    filled = max(0, min(bars, round((hp / max_hp) * bars))) if max_hp else 0
+    hpbar = "█" * filled + "░" * (bars - filled)
+
+    phase_index = min(state["phase"], len(state["phases"]) - 1)
+    phase_name, question, _answer = state["phases"][phase_index]
+
+    embed = discord.Embed(
+        title=f"⚔️ Bosskampf — {state['name']}",
+        description=message or "Die Arena bebt. Catnip übernimmt die Spielleitung. 🐾",
+    )
+    embed.add_field(
+        name="❤️ Boss-HP",
+        value=f"`{hp}/{max_hp}`  **{pct}%**\n`{hpbar}`",
+        inline=False,
+    )
+    embed.add_field(name="🔥 Aktuelle Phase", value=phase_name, inline=False)
+    embed.add_field(name="❓ Mechanik", value=question, inline=False)
+    embed.add_field(
+        name="🎯 Antworten",
+        value="Benutzt `/bossantwort antwort:<eure Antwort>` gemeinsam im Channel.",
+        inline=False,
+    )
+    embed.set_footer(text=f"Richtige Antworten: {state['correct']} • Fehler: {state['wrong']}")
+    return embed
+
+@client.tree.command(name="bossstart", description="Startet einen interaktiven KI-Catnip-Bosskampf.")
+@app_commands.describe(boss="Boss auswählen")
+@app_commands.choices(
+    boss=[
+        app_commands.Choice(name="Ifrit", value="Ifrit"),
+        app_commands.Choice(name="Titan", value="Titan"),
+        app_commands.Choice(name="Jupiter", value="Jupiter"),
+    ]
+)
+async def bossstart(interaction: discord.Interaction, boss: app_commands.Choice[str]):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Nur freigeschaltete KI-Catnip-Administratoren dürfen Bosskämpfe starten.",
+            ephemeral=True,
+        )
+        return
+    if interaction.guild is None:
+        await interaction.response.send_message("Bosskämpfe funktionieren nur auf einem Server.", ephemeral=True)
+        return
+
+    key = _boss_key(interaction.guild.id, interaction.channel_id)
+    if key in active_boss_battles:
+        await interaction.response.send_message(
+            "⚠️ In diesem Channel läuft bereits ein Bosskampf. Nutze zuerst `/bossstop`.",
+            ephemeral=True,
+        )
+        return
+
+    template = BOSS_TEMPLATES[boss.value]
+    active_boss_battles[key] = {
+        "name": boss.value,
+        "hp": template["max_hp"],
+        "max_hp": template["max_hp"],
+        "phase": 0,
+        "phases": template["phases"],
+        "correct": 0,
+        "wrong": 0,
+        "answered_users": set(),
+    }
+    state = active_boss_battles[key]
+    await interaction.response.send_message(
+        embed=boss_embed(state, message=f"⚔️ **{boss.value}** betritt die Arena! Mögen die AoEs woanders liegen.")
+    )
+
+@client.tree.command(name="bossstatus", description="Zeigt den aktuellen Bosskampf in diesem Channel.")
+async def bossstatus(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message("Bosskämpfe funktionieren nur auf einem Server.", ephemeral=True)
+        return
+    state = active_boss_battles.get(_boss_key(interaction.guild.id, interaction.channel_id))
+    if not state:
+        await interaction.response.send_message("🐾 In diesem Channel läuft gerade kein Bosskampf.", ephemeral=True)
+        return
+    await interaction.response.send_message(embed=boss_embed(state))
+
+@client.tree.command(name="bossantwort", description="Beantwortet die aktuelle Mechanik eines Bosskampfs.")
+@app_commands.describe(antwort="Deine Antwort auf die aktuelle Mechanik")
+async def bossantwort(interaction: discord.Interaction, antwort: str):
+    if interaction.guild is None:
+        await interaction.response.send_message("Bosskämpfe funktionieren nur auf einem Server.", ephemeral=True)
+        return
+
+    key = _boss_key(interaction.guild.id, interaction.channel_id)
+    state = active_boss_battles.get(key)
+    if not state:
+        await interaction.response.send_message("🐾 Hier läuft aktuell kein Bosskampf.", ephemeral=True)
+        return
+
+    if interaction.user.id in state["answered_users"]:
+        await interaction.response.send_message(
+            "🐱 Du hast diese Mechanik bereits beantwortet. Jetzt sind die anderen Abenteurer dran.",
+            ephemeral=True,
+        )
+        return
+
+    phase_name, _question, expected = state["phases"][state["phase"]]
+    given = _normalize_boss_answer(antwort)
+    state["answered_users"].add(interaction.user.id)
+
+    if given == expected:
+        state["correct"] += 1
+        damage = max(1, state["max_hp"] // len(state["phases"]))
+        state["hp"] = max(0, state["hp"] - damage)
+
+        if state["hp"] <= 0 or state["phase"] >= len(state["phases"]) - 1:
+            state["hp"] = 0
+            victory = discord.Embed(
+                title=f"🏆 VICTORY — {state['name']} besiegt!",
+                description=(
+                    f"Die Gruppe hat **{state['correct']}** Mechaniken richtig gelöst "
+                    f"und **{state['wrong']}** Fehler gemacht.\n\n"
+                    "Catnip schnurrt zufrieden. Die Arena gehört euch. 🐱"
+                ),
+            )
+            del active_boss_battles[key]
+            await interaction.response.send_message(embed=victory)
+            return
+
+        state["phase"] += 1
+        state["answered_users"].clear()
+        await interaction.response.send_message(
+            embed=boss_embed(
+                state,
+                message=f"✅ **Richtig!** {state['name']} erleidet schweren Schaden. Die nächste Phase beginnt!",
+            )
+        )
+        return
+
+    state["wrong"] += 1
+    await interaction.response.send_message(
+        f"💥 **Falsch!** `{antwort}` löst **{phase_name}** nicht. "
+        "Die Mechanik bleibt aktiv – ein anderer Spieler kann es versuchen."
+    )
+
+@client.tree.command(name="bossstop", description="Beendet den Bosskampf im aktuellen Channel.")
+async def bossstop(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Nur freigeschaltete KI-Catnip-Administratoren dürfen Bosskämpfe beenden.",
+            ephemeral=True,
+        )
+        return
+    if interaction.guild is None:
+        await interaction.response.send_message("Bosskämpfe funktionieren nur auf einem Server.", ephemeral=True)
+        return
+    key = _boss_key(interaction.guild.id, interaction.channel_id)
+    state = active_boss_battles.pop(key, None)
+    if not state:
+        await interaction.response.send_message("🐾 Hier läuft kein Bosskampf.", ephemeral=True)
+        return
+    await interaction.response.send_message(f"🛑 Der Bosskampf gegen **{state['name']}** wurde beendet.")
+
+
 @client.tree.command(
     name="catnip",
     description="Zeigt, wer KI-Catnip ist und wie sein Charakter tickt."
@@ -2247,6 +2461,7 @@ async def on_ready():
     print(f"✓ Modell: {GEMINI_MODEL}")
     print(f"✓ @Mention-Fragen: aktiv")
     print(f"✓ Catnip-Persönlichkeit: Stufe 3 aktiv")
+    print(f"✓ Bosskämpfe: Stufe 4 aktiv (/bossstart, /bossantwort, /bossstatus, /bossstop)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
