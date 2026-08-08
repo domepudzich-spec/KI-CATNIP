@@ -9,17 +9,26 @@ from urllib.parse import quote
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 import httpx
+import tempfile
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 BOT_NAME = os.getenv("BOT_NAME", "KI-Catnip")
 DEFAULT_SPOILER_LEVEL = os.getenv("DEFAULT_SPOILER_LEVEL", "Dawntrail")
-WEB_SEARCH = os.getenv("WEB_SEARCH", "false").lower() in {"1", "true", "yes", "ja"}
+WEB_SEARCH = os.getenv("WEB_SEARCH", "true").lower() in {"1", "true", "yes", "ja"}
+GEMINI_FREE_TIER = os.getenv("GEMINI_FREE_TIER", "true").lower() in {"1", "true", "yes", "ja"}
 
 # ---------------------------------------------------------------------------
 # Lokales Monatsbudget
@@ -30,13 +39,14 @@ MONTHLY_BUDGET_EUR = float(os.getenv("MONTHLY_BUDGET_EUR", "20.00"))
 # 1 USD ≈ 0,867 EUR. Dieser Wert kann jederzeit in .env angepasst werden.
 EUR_PER_USD = float(os.getenv("EUR_PER_USD", "0.867"))
 
-# GPT-5.6 Luna Standardpreise in USD pro 1 Mio. Tokens (07.08.2026).
-INPUT_USD_PER_M = float(os.getenv("INPUT_USD_PER_M", "1.00"))
-CACHED_INPUT_USD_PER_M = float(os.getenv("CACHED_INPUT_USD_PER_M", "0.10"))
-OUTPUT_USD_PER_M = float(os.getenv("OUTPUT_USD_PER_M", "6.00"))
+# Gemini 2.5 Flash-Lite: Paid-Tier-Äquivalent (nur für lokale Schätzung).
+# Im kostenlosen Tier entstehen für unterstützte Nutzung tatsächlich 0 € API-Kosten.
+INPUT_USD_PER_M = float(os.getenv("INPUT_USD_PER_M", "0.10"))
+CACHED_INPUT_USD_PER_M = float(os.getenv("CACHED_INPUT_USD_PER_M", "0.01"))
+OUTPUT_USD_PER_M = float(os.getenv("OUTPUT_USD_PER_M", "0.40"))
 
-# Responses API Web Search: $10 / 1000 Calls = $0.01 pro Tool-Call.
-WEB_SEARCH_USD_PER_CALL = float(os.getenv("WEB_SEARCH_USD_PER_CALL", "0.01"))
+# Konservative Paid-Tier-Schätzung für Such-Grounding nach Freikontingenten.
+WEB_SEARCH_USD_PER_CALL = float(os.getenv("WEB_SEARCH_USD_PER_CALL", "0.035"))
 
 BUDGET_FILE = Path(os.getenv("BUDGET_FILE", "budget_usage.json"))
 BUDGET_WARNING_EUR = float(os.getenv("BUDGET_WARNING_EUR", "15.00"))
@@ -66,10 +76,10 @@ PRIVATE_ADMIN_ROLE_ID = int(os.getenv("PRIVATE_ADMIN_ROLE_ID", "0"))
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN fehlt in der .env-Datei.")
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY fehlt in der .env-Datei.")
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY fehlt in der .env-Datei.")
 
-ai = AsyncOpenAI(api_key=OPENAI_API_KEY)
+ai = genai.Client(api_key=GEMINI_API_KEY)
 http = httpx.AsyncClient(timeout=20.0, headers={"User-Agent": "Schattenflauscher-FFXIV-Bot/1.0"})
 
 # Getrennter Gesprächskontext pro Discord-Channel
@@ -192,52 +202,47 @@ def budget_remaining():
 
 
 def budget_exhausted():
-    # Sicherheitsreserve verhindert, dass eine letzte Anfrage das Zielbudget
-    # voraussichtlich überschreitet.
+    # Im Gemini Free Tier gibt es keine kostenpflichtige API-Nutzung.
+    # Das lokale 20-Euro-Limit bleibt als Fallback für einen späteren
+    # Wechsel auf einen kostenpflichtigen Gemini-Tarif erhalten.
+    if GEMINI_FREE_TIER:
+        return False
     return budget_remaining() <= BUDGET_SAFETY_RESERVE_EUR
 
 
 def count_web_search_calls(response):
-    count = 0
+    """Schätzt, ob Gemini Google Search Grounding verwendet hat."""
     try:
-        for item in response.output:
-            item_type = getattr(item, "type", "")
-            if item_type in {"web_search_call", "web_search"}:
-                count += 1
+        candidate = response.candidates[0]
+        metadata = getattr(candidate, "grounding_metadata", None)
+        queries = getattr(metadata, "web_search_queries", None) if metadata else None
+        return len(queries or [])
     except Exception:
-        pass
-    return count
-
+        return 0
 
 def record_api_usage(response):
     """
-    Speichert eine lokale Kostenschätzung anhand der von der API
-    zurückgegebenen Token-Nutzung.
-
-    Das ist ein Schutzlimit für diesen Bot, kein Ersatz für die
-    Abrechnung/Usage-Anzeige im OpenAI-Konto.
+    Speichert Token-Nutzung. Im Free Tier werden reale API-Kosten als 0 €
+    behandelt; zusätzlich wird ein Paid-Tier-Äquivalent berechnet, falls
+    GEMINI_FREE_TIER=false gesetzt wird.
     """
     data = load_budget()
-    usage = getattr(response, "usage", None)
+    usage = getattr(response, "usage_metadata", None)
 
-    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-
-    cached_tokens = 0
-    details = getattr(usage, "input_tokens_details", None)
-    if details:
-        cached_tokens = int(getattr(details, "cached_tokens", 0) or 0)
-
+    input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
+    output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+    cached_tokens = int(getattr(usage, "cached_content_token_count", 0) or 0)
     uncached_tokens = max(0, input_tokens - cached_tokens)
     web_calls = count_web_search_calls(response)
 
-    usd = (
+    usd_equivalent = (
         uncached_tokens / 1_000_000 * INPUT_USD_PER_M
         + cached_tokens / 1_000_000 * CACHED_INPUT_USD_PER_M
         + output_tokens / 1_000_000 * OUTPUT_USD_PER_M
         + web_calls * WEB_SEARCH_USD_PER_CALL
     )
-    eur = usd * EUR_PER_USD
+
+    eur = 0.0 if GEMINI_FREE_TIER else usd_equivalent * EUR_PER_USD
 
     data["estimated_eur"] = round(float(data["estimated_eur"]) + eur, 6)
     data["input_tokens"] += input_tokens
@@ -249,21 +254,28 @@ def record_api_usage(response):
 
     return eur, data
 
-
 def budget_status_text():
     data = load_budget()
     spent = float(data["estimated_eur"])
+
+    if GEMINI_FREE_TIER:
+        return (
+            "🆓 **Gemini Free Tier ist aktiv**\n"
+            f"**KI-Anfragen diesen Monat:** {data['requests']}\n"
+            f"**Input-Tokens:** {data['input_tokens']:,}\n"
+            f"**Output-Tokens:** {data['output_tokens']:,}\n"
+            f"**Google-Suchen:** {data['web_search_calls']}\n"
+            "Aktuell werden vom Bot keine kostenpflichtigen Gemini-API-Kosten "
+            "angesetzt. Google-Ratenlimits gelten trotzdem."
+        )
+
     remaining = max(0.0, MONTHLY_BUDGET_EUR - spent)
     percent = min(100.0, (spent / MONTHLY_BUDGET_EUR * 100) if MONTHLY_BUDGET_EUR else 100)
-
     return (
-        f"💶 **Monatsbudget:** {spent:.2f} € / {MONTHLY_BUDGET_EUR:.2f} € "
-        f"({percent:.0f} %)\n"
+        f"💶 **Monatsbudget:** {spent:.2f} € / {MONTHLY_BUDGET_EUR:.2f} € ({percent:.0f} %)\n"
         f"**Verbleibend:** ca. {remaining:.2f} €\n"
-        f"**Sicherheitsreserve:** {BUDGET_SAFETY_RESERVE_EUR:.2f} €\n"
-        f"**KI-Anfragen:** {data['requests']} · "
-        f"**Websuchen:** {data['web_search_calls']}\n"
-        "_Lokale Kostenschätzung; die OpenAI-Abrechnung ist maßgeblich._"
+        f"**KI-Anfragen:** {data['requests']} · **Google-Suchen:** {data['web_search_calls']}\n"
+        "_Lokale Gemini-Kostenschätzung; die Anbieterabrechnung ist maßgeblich._"
     )
 
 
@@ -272,6 +284,9 @@ async def notify_budget_admin_if_needed(data):
     Sendet Budgetwarnungen ausschließlich per DM an den konfigurierten Admin.
     Warnungen werden pro Monat/Stufe nur einmal gesendet.
     """
+    if GEMINI_FREE_TIER:
+        return
+
     spent = float(data.get("estimated_eur", 0.0))
     month = data.get("month", current_month_key())
 
@@ -370,27 +385,22 @@ def split_message(text: str, limit: int = 1900):
 def extract_sources(response, max_sources=5):
     sources = []
     seen = set()
-
     try:
-        for item in response.output:
-            if getattr(item, "type", None) != "message":
-                continue
-            for content in getattr(item, "content", []) or []:
-                for ann in getattr(content, "annotations", []) or []:
-                    if getattr(ann, "type", None) != "url_citation":
-                        continue
-                    url = getattr(ann, "url", None)
-                    title = getattr(ann, "title", None) or "Quelle"
-                    if url and url not in seen:
-                        seen.add(url)
-                        sources.append((title, url))
-                    if len(sources) >= max_sources:
-                        return sources
+        candidate = response.candidates[0]
+        metadata = getattr(candidate, "grounding_metadata", None)
+        chunks = getattr(metadata, "grounding_chunks", None) if metadata else None
+        for chunk in chunks or []:
+            web = getattr(chunk, "web", None)
+            url = getattr(web, "uri", None) if web else None
+            title = getattr(web, "title", None) if web else None
+            if url and url not in seen:
+                seen.add(url)
+                sources.append((title or "Quelle", url))
+            if len(sources) >= max_sources:
+                break
     except Exception:
         pass
-
     return sources
-
 
 def append_sources(answer: str, sources):
     if not sources:
@@ -426,36 +436,61 @@ async def ask_ai(channel_id: int, username: str, question: str, *, remember=True
             f"MONATSBUDGET_ERREICHT:{MONTHLY_BUDGET_EUR:.2f}"
         )
 
-    messages = []
+    contents = []
 
     if remember:
-        # Nur die letzten 6 Nachrichten mitsenden: spart Input-Tokens.
         recent_history = list(history[channel_id])[-6:]
         for item in recent_history:
-            messages.append({"role": item["role"], "content": item["content"]})
+            role = "model" if item["role"] == "assistant" else "user"
+            contents.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=item["content"])]
+                )
+            )
 
     user_text = f"{username}: {question}"
-    messages.append({"role": "user", "content": user_text})
-
-    kwargs = {
-        "model": OPENAI_MODEL,
-        "instructions": SYSTEM_PROMPT,
-        "input": messages,
-    }
+    contents.append(
+        types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=user_text)]
+        )
+    )
 
     use_web = force_web or (WEB_SEARCH and should_use_web(question))
-    if use_web:
-        kwargs["tools"] = [{
-            "type": "web_search",
-            "search_context_size": "low",
-            "external_web_access": True,
-        }]
-        kwargs["tool_choice"] = "required"
 
-    response = await ai.responses.create(**kwargs)
+    tools = None
+    if use_web:
+        tools = [
+            types.Tool(
+                google_search=types.GoogleSearch()
+            )
+        ]
+
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_PROMPT,
+        tools=tools,
+        temperature=0.35,
+        max_output_tokens=1800,
+    )
+
+    print(
+        f"Gemini-Anfrage: user={username}, model={GEMINI_MODEL}, "
+        f"web={'ja' if use_web else 'nein'}"
+    )
+
+    response = await ai.aio.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=contents,
+        config=config,
+    )
+
     request_cost_eur, budget_data = record_api_usage(response)
     await notify_budget_admin_if_needed(budget_data)
-    answer = response.output_text.strip()
+
+    answer = (response.text or "").strip()
+    if not answer:
+        answer = "Ich konnte dazu gerade keine Textantwort erzeugen."
 
     answer = append_sources(answer, extract_sources(response))
 
@@ -1404,6 +1439,155 @@ Frei erfundene Inhalte als **Event-Lore** kennzeichnen.
     await send_interaction(interaction, prompt)
 
 
+
+# ===========================================================================
+# PDF-GUIDES
+# ===========================================================================
+
+def build_pdf_file(title: str, body: str, author: str) -> Path:
+    safe_name = re.sub(r"[^A-Za-z0-9ÄÖÜäöüß_-]+", "_", title).strip("_")[:60] or "FFXIV_Guide"
+    path = Path(tempfile.gettempdir()) / f"KI-Catnip_{safe_name}.pdf"
+
+    doc = SimpleDocTemplate(
+        str(path),
+        pagesize=A4,
+        leftMargin=18*mm,
+        rightMargin=18*mm,
+        topMargin=17*mm,
+        bottomMargin=17*mm,
+        title=title,
+        author="KI-Catnip",
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "CatnipTitle",
+        parent=styles["Title"],
+        fontSize=21,
+        leading=26,
+        alignment=TA_CENTER,
+        spaceAfter=14,
+    )
+    h_style = ParagraphStyle(
+        "CatnipHeading",
+        parent=styles["Heading2"],
+        fontSize=13,
+        leading=17,
+        spaceBefore=9,
+        spaceAfter=5,
+    )
+    body_style = ParagraphStyle(
+        "CatnipBody",
+        parent=styles["BodyText"],
+        fontSize=9.7,
+        leading=14,
+        spaceAfter=5,
+    )
+
+    story = [
+        Paragraph(title, title_style),
+        Paragraph(f"Erstellt von KI-Catnip für {author}", body_style),
+        Spacer(1, 6),
+    ]
+
+    def clean(s: str) -> str:
+        return (
+            s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+        )
+
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line:
+            story.append(Spacer(1, 4))
+            continue
+
+        if line.startswith("### "):
+            story.append(Paragraph(clean(line[4:]), h_style))
+        elif line.startswith("## "):
+            story.append(Paragraph(clean(line[3:]), h_style))
+        elif line.startswith("# "):
+            story.append(Paragraph(clean(line[2:]), h_style))
+        elif line.startswith(("- ", "• ")):
+            story.append(Paragraph("• " + clean(line[2:]), body_style))
+        else:
+            # Basic Markdown bold -> ReportLab bold
+            escaped = clean(line)
+            escaped = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
+            story.append(Paragraph(escaped, body_style))
+
+    doc.build(story)
+    return path
+
+
+@client.tree.command(name="pdf", description="Erstellt einen FFXIV-Guide als PDF-Datei.")
+@app_commands.describe(
+    thema="Thema des Guides",
+    titel="Optionaler Titel der PDF",
+    aktuell="Aktuelle/patchabhängige Informationen mit Google-Suche prüfen?"
+)
+async def pdf(
+    interaction: discord.Interaction,
+    thema: str,
+    titel: str = "",
+    aktuell: bool = False,
+):
+    await interaction.response.defer(thinking=True)
+
+    prompt = f"""
+Erstelle einen gut strukturierten FINAL FANTASY XIV Guide als PDF-Grundlage.
+
+Thema: {thema}
+
+Anforderungen:
+- verständliches Deutsch
+- klare Überschriften
+- praktische Schritte
+- wichtige Voraussetzungen
+- häufige Fehler oder Hinweise, wenn relevant
+- keine unnötigen Wiederholungen
+- bei Storythemen Spoiler klar kennzeichnen
+- erfinde keine FFXIV-Fakten
+- ungefähr 700 bis 1400 Wörter, je nach Thema
+""".strip()
+
+    try:
+        answer = await ask_ai(
+            interaction.channel_id,
+            interaction.user.display_name,
+            prompt,
+            remember=False,
+            force_web=aktuell,
+        )
+
+        pdf_title = titel.strip() or f"FFXIV Guide – {thema}"
+        file_path = build_pdf_file(
+            pdf_title,
+            answer,
+            interaction.user.display_name,
+        )
+
+        try:
+            await interaction.followup.send(
+                f"🐱📄 **Dein Guide ist fertig:** {pdf_title}",
+                file=discord.File(str(file_path), filename=file_path.name),
+            )
+        finally:
+            try:
+                file_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    except Exception as exc:
+        print(f"PDF-Fehler: {type(exc).__name__}: {exc}")
+        await interaction.followup.send(
+            "⚠️ KI-Catnip konnte die PDF gerade nicht erstellen. "
+            "Prüfe die Railway-Logs."
+        )
+
+
+
 # ===========================================================================
 # RESET / INFO
 # ===========================================================================
@@ -1483,7 +1667,7 @@ async def botinfo(interaction: discord.Interaction):
         value="Aktiv" if WEB_SEARCH else "Deaktiviert",
         inline=True,
     )
-    embed.set_footer(text=f"Modell: {OPENAI_MODEL}")
+    embed.set_footer(text=f"Modell: {GEMINI_MODEL}")
     await interaction.response.send_message(embed=embed)
 
 
@@ -1494,12 +1678,12 @@ async def on_ready():
 
     print("=" * 56)
     print(f"✓ {client.user} ist online.")
-    print(f"✓ Modell: {OPENAI_MODEL}")
+    print(f"✓ Modell: {GEMINI_MODEL}")
     print(f"✓ @Mention-Fragen: aktiv")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
-    print(f"✓ Modell: {OPENAI_MODEL} (sparsame Voreinstellung)")
+    print(f"✓ Modell: {GEMINI_MODEL} (sparsame Voreinstellung)")
     print(f"✓ News: nicht enthalten")
     print(f"✓ Serverstatus: nicht enthalten")
     print("=" * 56)

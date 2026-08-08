@@ -1,3 +1,59 @@
+
+
+# GEMINI FREE-TIER VERSION
+
+Diese Version verwendet **Google Gemini statt Gemini**.
+
+Standardmodell:
+
+```text
+gemini-2.5-flash-lite
+```
+
+## Railway-Umstellung
+
+1. Erzeuge in Google AI Studio einen Gemini API-Key.
+2. Öffne Railway -> KI-CATNIP -> Variables.
+3. Lösche bzw. ignoriere:
+   - `GEMINI_API_KEY`
+   - `GEMINI_MODEL`
+4. Füge hinzu:
+
+```text
+GEMINI_API_KEY=dein_key
+GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_FREE_TIER=true
+WEB_SEARCH=true
+```
+
+5. Ersetze auf GitHub mindestens:
+   - `bot.py`
+   - `requirements.txt`
+   - `.env.example`
+6. Committe die Änderungen. Railway deployt automatisch neu.
+
+## Kostenloser Tier
+
+Mit `GEMINI_FREE_TIER=true` blockiert KI-Catnip nicht wegen des alten
+20-Euro-Limits. `/budget` zeigt stattdessen Token- und Anfrageverbrauch.
+
+Wenn du später bewusst einen kostenpflichtigen Gemini-Tarif aktivierst, kannst
+du `GEMINI_FREE_TIER=false` setzen. Dann wird das lokale 20-Euro-Sicherheitslimit
+wieder verwendet.
+
+## Enthaltene Funktionen
+
+- normale Fragen mit `@KI-Catnip`
+- `/ffxiv`, `/lore`, `/job`, `/kampf`, `/quest`
+- `/mount`, `/minion`, `/markt`, `/charakter`
+- `/quiz`, `/event`, `/boss`, `/raetsel`
+- Event-Admin-Whitelist
+- private User-Channels
+- Begrüßung und Rückkehr-Begrüßung
+- `/pdf` für FFXIV-Guides
+- `/budget`
+
+
 # Schattenflauscher — Eorzea-Enzyklopädie
 
 # Sparsame Version
@@ -126,7 +182,7 @@ Berechtigungen:
 - Embed Links
 - Read Message History
 
-## 4. OpenAI API-Key
+## 4. Gemini API-Key
 
 https://platform.openai.com/api-keys
 
@@ -136,8 +192,8 @@ https://platform.openai.com/api-keys
 
 ```env
 DISCORD_TOKEN=...
-OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-5.6
+GEMINI_API_KEY=...
+GEMINI_MODEL=gpt-5.6
 BOT_NAME=KI-Catnip
 DEFAULT_SPOILER_LEVEL=Dawntrail
 WEB_SEARCH=false
@@ -220,7 +276,7 @@ MONTHLY_BUDGET_EUR=20.00
 BUDGET_WARNING_EUR=15.00
 ```
 
-Der Bot zählt nach jeder OpenAI-Antwort:
+Der Bot zählt nach jeder Gemini-Antwort:
 - Input-Tokens
 - davon erkannte Cached-Input-Tokens
 - Output-Tokens
@@ -243,19 +299,19 @@ werden weitere KI-Anfragen bis zum nächsten Kalendermonat blockiert.
 ## Wichtig
 
 Das ist ein **lokaler Schutzmechanismus des Bots**. Er kann die offizielle
-OpenAI-Abrechnung nicht technisch ersetzen. Wechselkurse, Preisänderungen,
+Gemini-Abrechnung nicht technisch ersetzen. Wechselkurse, Preisänderungen,
 nicht erkannte Tool-Kosten oder andere Anwendungen desselben API-Projekts
 können zu Abweichungen führen.
 
 Für eine möglichst sichere Kostenkontrolle solltest du zusätzlich im
-OpenAI-Platform-Konto die dort verfügbaren Budget-/Usage-Einstellungen nutzen.
+Gemini-Platform-Konto die dort verfügbaren Budget-/Usage-Einstellungen nutzen.
 
 ## Sparmodell
 
 Standardmäßig verwendet diese Version:
 
 ```env
-OPENAI_MODEL=gpt-5.6-luna
+GEMINI_MODEL=gpt-5.6-luna
 ```
 
 Dadurch ist sie erheblich günstiger als der Alias `gpt-5.6`, der derzeit
