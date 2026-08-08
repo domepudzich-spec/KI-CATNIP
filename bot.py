@@ -2192,6 +2192,392 @@ async def botinfo(interaction: discord.Interaction):
 
 
 
+
+# ============================================================
+# STUFE 5.1 — MEHRSTUFIGE RÄTSEL-EVENTS
+# ============================================================
+
+active_riddle_events = {}
+
+RIDDLE_PRESETS = {
+    "FFXIV Wissen": [
+        {
+            "title": "Station 1 — Die Rolle",
+            "question": "Welche der drei klassischen Gruppenrollen hält einen Boss normalerweise frontal und bindet seine Aufmerksamkeit?",
+            "answer": "tank",
+            "hints": [
+                "Diese Rolle trägt meist besonders robuste Ausrüstung.",
+                "Sie nutzt Fähigkeiten wie Provozieren und defensive Cooldowns.",
+                "Die gesuchte Rolle ist der Tank.",
+            ],
+        },
+        {
+            "title": "Station 2 — Die Bodenmarkierung",
+            "question": "Was sollte man in FFXIV normalerweise tun, wenn unter dem eigenen Charakter eine feindliche AoE-Fläche erscheint?",
+            "answer": "raus",
+            "hints": [
+                "Die Fläche kündigt Schaden an.",
+                "Bewegung ist meist wichtiger als noch ein zusätzlicher Angriff.",
+                "Die Lösung ist: aus der AoE laufen.",
+            ],
+        },
+        {
+            "title": "Station 3 — Die Gruppe",
+            "question": "Welche Rolle stellt verlorene Lebenspunkte der Gruppe wieder her?",
+            "answer": "heiler",
+            "hints": [
+                "Sie hält die Party am Leben.",
+                "Zu ihren Werkzeugen gehören Einzel- und Gruppenheilungen.",
+                "Die gesuchte Rolle ist der Heiler.",
+            ],
+        },
+    ],
+    "Eorzea": [
+        {
+            "title": "Station 1 — Die Waldstadt",
+            "question": "Welche große Stadtstaat-Region ist besonders mit dem Finsterwald verbunden?",
+            "answer": "gridania",
+            "hints": [
+                "Sie liegt im Schwarzen Wald.",
+                "Die Kan-E-Senna ist eng mit ihr verbunden.",
+                "Die Lösung ist Gridania.",
+            ],
+        },
+        {
+            "title": "Station 2 — Die Wüstenstadt",
+            "question": "Welche Stadt ist für Handel, Reichtum und ihre Lage in Thanalan bekannt?",
+            "answer": "uldah",
+            "hints": [
+                "Sie liegt in Thanalan.",
+                "Die Sultana Nanamo ist mit dieser Stadt verbunden.",
+                "Die Lösung ist Ul'dah.",
+            ],
+        },
+        {
+            "title": "Station 3 — Die Hafenstadt",
+            "question": "Welche Stadtstaat-Region ist besonders für Seefahrt und Piraten bekannt?",
+            "answer": "limsa lominsa",
+            "hints": [
+                "Sie liegt an der Küste.",
+                "Die Maelstrom-Organisation hat dort ihren Sitz.",
+                "Die Lösung ist Limsa Lominsa.",
+            ],
+        },
+    ],
+    "Event-Lore": [
+        {
+            "title": "Station 1 — Die versiegelte Pforte",
+            "question": "Vor euch glühen drei Runen: Sonne, Mond und Stern. Welche Rune würdet ihr wählen, wenn der Hinweis lautet: 'Ich leuchte nur, wenn die Nacht beginnt'?",
+            "answer": "mond",
+            "hints": [
+                "Die Sonne scheidet aus.",
+                "Gesucht ist etwas, das besonders mit der Nacht verbunden ist.",
+                "Die Lösung ist Mond.",
+            ],
+        },
+        {
+            "title": "Station 2 — Der schwarze Eid",
+            "question": "Ein alter Text sagt: 'Nur wer schweigt, hört das Flüstern der Tiefe.' Welche Handlung ist am naheliegendsten?",
+            "answer": "schweigen",
+            "hints": [
+                "Der Text fordert keine Bewegung.",
+                "Es geht darum, keine Geräusche zu machen.",
+                "Die Lösung ist Schweigen.",
+            ],
+        },
+        {
+            "title": "Station 3 — Das letzte Siegel",
+            "question": "Drei Symbole erscheinen: Klinge, Schild und Schlüssel. Welches Symbol öffnet am ehesten ein versiegeltes Tor?",
+            "answer": "schlüssel",
+            "hints": [
+                "Eine Klinge trennt, ein Schild schützt.",
+                "Gesucht ist ein Gegenstand zum Öffnen.",
+                "Die Lösung ist Schlüssel.",
+            ],
+        },
+    ],
+}
+
+def _riddle_key(guild_id: int, channel_id: int):
+    return (guild_id, channel_id)
+
+def _normalize_riddle_answer(value: str) -> str:
+    value = (value or "").strip().lower()
+    value = value.replace("'", "").replace("’", "").replace("-", " ")
+    value = " ".join(value.split())
+
+    aliases = {
+        "uldah": {"ul dah", "uldah", "ul'dah"},
+        "limsa lominsa": {"limsa", "limsa lominsa"},
+        "heiler": {"heiler", "heal", "healing"},
+        "tank": {"tank", "tanken"},
+        "raus": {"raus", "ausweichen", "weg", "aus der aoe", "aoe verlassen"},
+        "mond": {"mond", "der mond"},
+        "schweigen": {"schweigen", "still sein", "stille"},
+        "schlüssel": {"schlüssel", "schluessel", "key"},
+        "gridania": {"gridania"},
+    }
+    for canonical, values in aliases.items():
+        if value in values:
+            return canonical
+    return value
+
+def riddle_event_embed(state: dict, *, message: str | None = None) -> discord.Embed:
+    station = state["stations"][state["index"]]
+
+    embed = discord.Embed(
+        title=f"🧩 Rätsel-Event — {state['theme']}",
+        description=message or "KI-Catnip öffnet die nächste Station. Die Pfoten bleiben von der Lösung fern. 🐾",
+    )
+    embed.add_field(
+        name="📍 Fortschritt",
+        value=f"Station **{state['index'] + 1}/{len(state['stations'])}**",
+        inline=True,
+    )
+    embed.add_field(
+        name="🏆 Punkte",
+        value=f"**{state['score']}**",
+        inline=True,
+    )
+    embed.add_field(
+        name="❌ Fehlversuche",
+        value=f"**{state['wrong']}**",
+        inline=True,
+    )
+    embed.add_field(name=f"🧩 {station['title']}", value=station["question"], inline=False)
+    embed.add_field(
+        name="💡 Hinweise",
+        value=(
+            f"Verwendet `/raetselhinweis`, wenn ihr Hilfe braucht.\n"
+            f"Bereits verwendet: **{state['hints_used_current']}/3**"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="✍️ Antwort",
+        value="Antwortet mit `/raetselantwort lösung:<eure Lösung>`.",
+        inline=False,
+    )
+    embed.set_footer(
+        text="Wertung: +100 richtige Lösung • -25 pro Hinweis • -10 pro Fehlversuch"
+    )
+    return embed
+
+def riddle_admin_solution_text(state: dict) -> str:
+    station = state["stations"][state["index"]]
+    return (
+        f"🔐 **Spielleiter-Lösung — {station['title']}**\n"
+        f"**Antwort:** `{station['answer']}`\n"
+        f"**Hinweise:**\n"
+        + "\n".join(f"{i+1}. {h}" for i, h in enumerate(station["hints"]))
+    )
+
+@client.tree.command(name="raetselevent", description="Startet ein mehrstufiges KI-Catnip-Rätsel-Event.")
+@app_commands.describe(
+    thema="Rätsel-Thema",
+    stationen="Anzahl der Stationen",
+)
+@app_commands.choices(
+    thema=[
+        app_commands.Choice(name="FFXIV Wissen", value="FFXIV Wissen"),
+        app_commands.Choice(name="Eorzea", value="Eorzea"),
+        app_commands.Choice(name="Event-Lore", value="Event-Lore"),
+    ]
+)
+async def raetselevent(
+    interaction: discord.Interaction,
+    thema: app_commands.Choice[str],
+    stationen: app_commands.Range[int, 1, 3] = 3,
+):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Nur freigeschaltete KI-Catnip-Administratoren dürfen Rätsel-Events starten.",
+            ephemeral=True,
+        )
+        return
+
+    if interaction.guild is None:
+        await interaction.response.send_message("Rätsel-Events funktionieren nur auf einem Server.", ephemeral=True)
+        return
+
+    key = _riddle_key(interaction.guild.id, interaction.channel_id)
+    if key in active_riddle_events:
+        await interaction.response.send_message(
+            "⚠️ In diesem Channel läuft bereits ein Rätsel-Event. Nutze zuerst `/raetselstop`.",
+            ephemeral=True,
+        )
+        return
+
+    stations = [dict(s) for s in RIDDLE_PRESETS[thema.value][:stationen]]
+    state = {
+        "theme": thema.value,
+        "stations": stations,
+        "index": 0,
+        "score": 0,
+        "wrong": 0,
+        "hints_used_current": 0,
+        "solved_by": [],
+    }
+    active_riddle_events[key] = state
+
+    await interaction.response.send_message(
+        embed=riddle_event_embed(
+            state,
+            message=f"🧩 **{thema.value}** beginnt! Löst die Stationen gemeinsam.",
+        )
+    )
+
+@client.tree.command(name="raetselantwort", description="Beantwortet die aktuelle Station eines Rätsel-Events.")
+@app_commands.describe(lösung="Eure Lösung")
+async def raetselantwort(interaction: discord.Interaction, lösung: str):
+    if interaction.guild is None:
+        await interaction.response.send_message("Rätsel-Events funktionieren nur auf einem Server.", ephemeral=True)
+        return
+
+    key = _riddle_key(interaction.guild.id, interaction.channel_id)
+    state = active_riddle_events.get(key)
+    if not state:
+        await interaction.response.send_message("🐾 Hier läuft gerade kein Rätsel-Event.", ephemeral=True)
+        return
+
+    station = state["stations"][state["index"]]
+    expected = _normalize_riddle_answer(station["answer"])
+    given = _normalize_riddle_answer(lösung)
+
+    if given == expected:
+        gained = max(10, 100 - state["hints_used_current"] * 25)
+        state["score"] += gained
+        state["solved_by"].append(interaction.user.display_name)
+
+        final = state["index"] >= len(state["stations"]) - 1
+        if final:
+            embed = discord.Embed(
+                title="🏆 Rätsel-Event abgeschlossen!",
+                description=(
+                    f"Alle **{len(state['stations'])} Stationen** wurden gelöst.\n\n"
+                    f"🏆 **Endpunktzahl:** {state['score']}\n"
+                    f"❌ **Fehlversuche:** {state['wrong']}\n"
+                    f"🧠 **Letzte Lösung durch:** {interaction.user.display_name}\n\n"
+                    "KI-Catnip schnurrt anerkennend. Kein Runensiegel ist vor euch sicher. 🐱"
+                ),
+            )
+            active_riddle_events.pop(key, None)
+            await interaction.response.send_message(embed=embed)
+            return
+
+        state["index"] += 1
+        state["hints_used_current"] = 0
+        await interaction.response.send_message(
+            embed=riddle_event_embed(
+                state,
+                message=(
+                    f"✅ **Richtig!** {interaction.user.display_name} löst die Station "
+                    f"und verdient **{gained} Punkte**. Die nächste Pforte öffnet sich."
+                ),
+            )
+        )
+        return
+
+    state["wrong"] += 1
+    state["score"] = max(0, state["score"] - 10)
+    await interaction.response.send_message(
+        f"❌ **Das ist noch nicht die Lösung.** `{lösung}` passt nicht zum Siegel.\n"
+        f"Die Gruppe verliert **10 Punkte**. Aktueller Stand: **{state['score']}**."
+    )
+
+@client.tree.command(name="raetselhinweis", description="Gibt den nächsten Hinweis zur aktuellen Rätsel-Station.")
+async def raetselhinweis(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+        return
+
+    key = _riddle_key(interaction.guild.id, interaction.channel_id)
+    state = active_riddle_events.get(key)
+    if not state:
+        await interaction.response.send_message("🐾 Hier läuft gerade kein Rätsel-Event.", ephemeral=True)
+        return
+
+    station = state["stations"][state["index"]]
+    hint_index = state["hints_used_current"]
+
+    if hint_index >= len(station["hints"]):
+        await interaction.response.send_message(
+            "💡 Ihr habt bereits alle Hinweise für diese Station verwendet.",
+            ephemeral=True,
+        )
+        return
+
+    hint = station["hints"][hint_index]
+    state["hints_used_current"] += 1
+    state["score"] = max(0, state["score"] - 25)
+
+    await interaction.response.send_message(
+        f"💡 **Hinweis {state['hints_used_current']}:** {hint}\n"
+        f"🏆 Aktuelle Punkte: **{state['score']}**"
+    )
+
+@client.tree.command(name="raetselloesung", description="Zeigt Admins die Lösung der aktuellen Rätsel-Station.")
+async def raetselloesung(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Nur KI-Catnip-Administratoren dürfen die Spielleiter-Lösung sehen.",
+            ephemeral=True,
+        )
+        return
+
+    if interaction.guild is None:
+        await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+        return
+
+    state = active_riddle_events.get(_riddle_key(interaction.guild.id, interaction.channel_id))
+    if not state:
+        await interaction.response.send_message("🐾 Hier läuft gerade kein Rätsel-Event.", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        riddle_admin_solution_text(state),
+        ephemeral=True,
+    )
+
+@client.tree.command(name="raetselstatus", description="Zeigt den aktuellen Stand des Rätsel-Events.")
+async def raetselstatus(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+        return
+
+    state = active_riddle_events.get(_riddle_key(interaction.guild.id, interaction.channel_id))
+    if not state:
+        await interaction.response.send_message("🐾 Hier läuft gerade kein Rätsel-Event.", ephemeral=True)
+        return
+
+    await interaction.response.send_message(embed=riddle_event_embed(state), ephemeral=True)
+
+@client.tree.command(name="raetselstop", description="Beendet das aktuelle Rätsel-Event.")
+async def raetselstop(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message(
+            "🔒 Nur KI-Catnip-Administratoren dürfen Rätsel-Events beenden.",
+            ephemeral=True,
+        )
+        return
+
+    if interaction.guild is None:
+        await interaction.response.send_message("Nur auf einem Server verfügbar.", ephemeral=True)
+        return
+
+    key = _riddle_key(interaction.guild.id, interaction.channel_id)
+    state = active_riddle_events.pop(key, None)
+    if not state:
+        await interaction.response.send_message("🐾 Hier läuft gerade kein Rätsel-Event.", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        f"🛑 Das Rätsel-Event **{state['theme']}** wurde beendet. "
+        f"Endstand: **{state['score']} Punkte**."
+    )
+
+
+
 # ============================================================
 # STUFE 4.1 — INTERAKTIVE BOSSKÄMPFE MIT BUTTONS + PARTY-HP
 # ============================================================
@@ -3039,6 +3425,7 @@ async def on_ready():
     print(f"✓ @Mention-Fragen: aktiv")
     print(f"✓ Catnip-Persönlichkeit: Stufe 3 aktiv")
     print(f"✓ Bosskämpfe: Stufe 4.3 aktiv (Heilung + K.O. + Wiederbelebung)")
+    print(f"✓ Rätsel-Events: Stufe 5.1 aktiv (/raetselevent, /raetselantwort, /raetselhinweis)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
