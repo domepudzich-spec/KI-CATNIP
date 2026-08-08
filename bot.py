@@ -949,82 +949,156 @@ async def create_private_ffxiv_channel(member: discord.Member):
         reason=f"Privater FFXIV-Channel für {member}",
     )
 
-    embed = discord.Embed(
-        title=f"🐱 Willkommen bei KI-Catnip, {member.display_name}!",
-        description=(
-            f"Schön, dass du da bist! **Wie kann ich dir bei FINAL FANTASY XIV helfen?**\n\n"
-            f"Frag mich einfach mit `@{BOT_NAME}` oder nutze einen meiner Slash-Commands. "
-            f"Ich kann dir unter anderem bei Lore, Jobs, Kämpfen, Quests, Mounts, Minions und Guides helfen."
-        ),
-    )
-    embed.add_field(
-        name="💬 Einfach fragen",
-        value=(
-            f"`@{BOT_NAME} Wie funktioniert Viper?`\n"
-            "`/ffxiv` – allgemeine FFXIV-Frage"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="📚 Wissen & Gameplay",
-        value=(
-            "`/lore` – Lore, Figuren und Orte\n"
-            "`/job` – Jobs, Skills und Spielweise\n"
-            "`/kampf` – Dungeon-, Trial- und Raidmechaniken\n"
-            "`/quest` – Hilfe bei Quests\n"
-            "`/begriff` – Begriffe und Abkürzungen\n"
-            "`/einsteiger` – einfache Erklärungen"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🔎 Nachschlagen",
-        value=(
-            "`/charakter` – Spielercharakter suchen\n"
-            "`/mount` – Mount-Herkunft und Freischaltung\n"
-            "`/minion` – Minion-Herkunft und Freischaltung\n"
-            "`/markt` – Marktbrettdaten über Universalis"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🎭 Events & Spielleiter",
-        value=(
-            "`/quiz` – FFXIV-Quiz für Events\n"
-            "`/event` – komplettes Gildenevent planen\n"
-            "`/boss` – Event-Bosskampf erstellen\n"
-            "`/raetsel` – einzelnes FFXIV-Rätsel erstellen"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="📄 Guides & PDFs",
-        value="`/pdf` – erstellt einen FFXIV-Guide als PDF-Datei",
-        inline=False,
-    )
-    embed.add_field(
-        name="🔒 Privater Chat",
-        value=(
-            "`/privatchat` – privaten FFXIV-Channel nachträglich erstellen\n"
-            "`/reset` – Gesprächskontext dieses Channels löschen\n"
-            "`/botinfo` – Funktionsübersicht anzeigen"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🔒 Persönlicher Spoilerschutz",
-        value=(
-            "Standardmäßig ist KI-Catnip **komplett spoilerfrei**.\n"
-            "`/fortschritt` – deinen persönlichen Story-Stand festlegen\n"
-            "`/spoiler an` – vorübergehend alle Spoiler erlauben\n"
-            "`/spoiler aus` – wieder auf deinen persönlichen Fortschritt begrenzen\n"
-            "`/spoiler status` – aktuellen Zustand prüfen"
-        ),
-        inline=False,
-    )
-    embed.set_footer(
-        text="Der Channel ist nur für dich, den Bot und freigeschaltete Administratoren sichtbar."
-    )
+    is_admin_member = member.id in EVENT_ADMIN_USER_IDS
+
+    if is_admin_member:
+        embed = discord.Embed(
+            title=f"🐱 Willkommen bei KI-Catnip, {member.display_name}!",
+            description=(
+                "Du bist als **KI-Catnip-Administrator** freigeschaltet.\n\n"
+                f"Frag mich einfach mit `@{BOT_NAME}` oder nutze einen der Slash-Commands. "
+                "Hier bekommst du einmalig die vollständige Funktionsübersicht."
+            ),
+        )
+        embed.add_field(
+            name="💬 Fragen & Wissen",
+            value=(
+                f"`@{BOT_NAME} deine Frage`\n"
+                "`/ffxiv` – allgemeine FFXIV-Frage\n"
+                "`/lore` – Lore, Figuren und Orte\n"
+                "`/job` – Jobs, Skills und Spielweise\n"
+                "`/kampf` – Dungeon-, Trial- und Raidmechaniken\n"
+                "`/quest` – Hilfe bei Quests\n"
+                "`/begriff` – Begriffe und Abkürzungen\n"
+                "`/einsteiger` – einfache Erklärungen"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🔎 Suche & Nachschlagen",
+            value=(
+                "`/charakter` – Spielercharakter suchen\n"
+                "`/mount` – Mount-Herkunft und Freischaltung\n"
+                "`/minion` – Minion-Herkunft und Freischaltung\n"
+                "`/markt` – Marktbrettdaten über Universalis\n"
+                "`/wissen` – Schattenpfoten-Wissensdatenbank durchsuchen\n"
+                "`/wissensliste` – Wissenseinträge anzeigen"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="📖 Persönlich & RP",
+            value=(
+                "`/fortschritt` – persönlicher Story-Stand\n"
+                "`/spoiler` – Spoilerschutz verwalten\n"
+                "`/profil` – Punkte-/Titelprofil\n"
+                "`/rangliste` – Rangliste\n"
+                "`/charaktererstellen` – RP-Charakter anlegen\n"
+                "`/charakterprofil` – RP-Charakter anzeigen\n"
+                "`/charakterbearbeiten` – RP-Charakter ändern\n"
+                "`/rp` – persönliche RP-Szene\n"
+                "`/rpquest` – persönliche Quest\n"
+                "`/rpgruppe` – Gruppen-RP"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🎭 Events & Spielleitung",
+            value=(
+                "`/quiz` – FFXIV-Quiz erstellen\n"
+                "`/event` – Gildenevent planen\n"
+                "`/boss` – Event-Boss entwerfen\n"
+                "`/raetsel` – einzelnes Rätsel erstellen\n"
+                "`/eventerstellen` – Event-Anmeldung\n"
+                "`/eventadmin` – Event-Admin-Zentrale\n"
+                "`/bossgruppe` – Kampfgruppe eröffnen\n"
+                "`/bossstart` – interaktiven Bosskampf starten\n"
+                "`/raetselevent` – mehrstufiges Rätsel-Event starten"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🐾 Schattenpfoten-Wissen",
+            value=(
+                "`/wissensadmin` – Wissensdatenbank-Adminmenü\n"
+                "`/wissenhinzufuegen` – Wissen speichern\n"
+                "`/wissenbearbeiten` – Wissen ändern\n"
+                "`/wissenloeschen` – Wissen löschen"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🔧 Verwaltung & Diagnose",
+            value=(
+                "`/admin` – Bot-Admin-Dashboard\n"
+                "`/diagnose` – Systemdiagnose\n"
+                "`/eventadmins` – Event-Admins anzeigen\n"
+                "`/punkte` – Punkte verwalten\n"
+                "`/budget` – Nutzung anzeigen\n"
+                "`/reset` – Gesprächskontext löschen\n"
+                "`/botinfo` – Funktionsübersicht"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="📄 Guides",
+            value="`/pdf` – erstellt einen FFXIV-Guide als PDF-Datei",
+            inline=False,
+        )
+        embed.set_footer(
+            text="Admin-Begrüßung • vollständige KI-Catnip-Funktionsübersicht"
+        )
+
+    else:
+        embed = discord.Embed(
+            title=f"🐱 Willkommen bei KI-Catnip, {member.display_name}!",
+            description=(
+                f"Schön, dass du da bist! **Wie kann ich dir bei FINAL FANTASY XIV helfen?**\n\n"
+                f"Frag mich einfach mit `@{BOT_NAME}` oder nutze die Such- und Fragebefehle unten."
+            ),
+        )
+        embed.add_field(
+            name="💬 KI-Catnip fragen",
+            value=(
+                f"`@{BOT_NAME} Wie funktioniert Viper?`\n"
+                "`/ffxiv` – allgemeine FFXIV-Frage\n"
+                "`/lore` – Lore, Figuren und Orte\n"
+                "`/job` – Jobs, Skills und Spielweise\n"
+                "`/kampf` – Dungeon-, Trial- und Raidmechaniken\n"
+                "`/quest` – Hilfe bei Quests\n"
+                "`/begriff` – Begriffe und Abkürzungen\n"
+                "`/einsteiger` – einfache Erklärungen"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🔎 Suchen & Nachschlagen",
+            value=(
+                "`/charakter` – Spielercharakter suchen\n"
+                "`/mount` – Mount-Herkunft und Freischaltung\n"
+                "`/minion` – Minion-Herkunft und Freischaltung\n"
+                "`/markt` – Marktbrettdaten über Universalis\n"
+                "`/wissen` – Schattenpfoten-Wissen durchsuchen\n"
+                "`/wissensliste` – Wissenseinträge anzeigen"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🔒 Spoilerschutz",
+            value=(
+                "`/fortschritt` – persönlichen Story-Stand festlegen\n"
+                "`/spoiler status` – aktuellen Schutz prüfen\n"
+                "`/spoiler an` – Spoiler ausdrücklich erlauben\n"
+                "`/spoiler aus` – wieder auf persönlichen Fortschritt begrenzen"
+            ),
+            inline=False,
+        )
+        embed.set_footer(
+            text=(
+                "Normale Nutzer sehen hier nur Fragen, Suche und Spoilerschutz. "
+                "Admin-/Eventfunktionen werden nicht in dieser Begrüßung angezeigt."
+            )
+        )
 
     await channel.send(member.mention, embed=embed)
     return channel
