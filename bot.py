@@ -85,6 +85,25 @@ http = httpx.AsyncClient(timeout=20.0, headers={"User-Agent": "Schattenflauscher
 # Getrennter Gesprächskontext pro Discord-Channel
 history = defaultdict(lambda: deque(maxlen=10))
 
+# Spoiler sind standardmäßig vollständig gesperrt.
+# Nur Channels, die explizit per /spoiler an freigeschaltet wurden, stehen hier.
+spoiler_enabled_channels = set()
+
+# Formulierungen, die Spoiler nur für EINE konkrete Anfrage erlauben.
+SINGLE_REQUEST_SPOILER_PHRASES = (
+    "du darfst spoilern",
+    "spoiler erlaubt",
+    "mit spoilern",
+    "inklusive spoilern",
+    "volle story",
+    "komplette story",
+    "erzähl alles",
+    "erzaehl alles",
+    "ohne rücksicht auf spoiler",
+    "ohne ruecksicht auf spoiler",
+)
+
+
 # Letzte Aktivität pro privatem User-Channel.
 # Wird nur im Arbeitsspeicher gehalten; nach einem Bot-Neustart beginnt die
 # Rückkehr-Erkennung neu.
@@ -126,10 +145,21 @@ QUELLEN & AKTUALITÄT
   Community-Daten, keine Garantie für den Preis im Spiel.
 - Charakterprofile müssen nach Möglichkeit auf dem offiziellen Lodestone geprüft werden.
 
-SPOILER
-Standard-Spoilergrenze: {DEFAULT_SPOILER_LEVEL}
-- Vermeide Storyspoiler oberhalb der genannten Grenze.
-- Größere Spoiler mit **⚠️ SPOILER** markieren.
+SPOILER-SCHUTZ — HÖCHSTE PRIORITÄT
+- Spoiler sind standardmäßig VERBOTEN.
+- Ohne ausdrückliche Spoilerfreigabe darfst du KEINE wichtigen Storyenthüllungen nennen.
+- Dazu zählen insbesondere: Tode, Opfer, Verrat, geheime Identitäten, wahre Herkunft,
+  spätere Bündnisse/Feindschaften, Bossidentitäten, spätere Formen, Enden von Handlungsbögen,
+  zentrale Wendungen, Schicksale von Figuren und überraschende Rückkehrer.
+- Auch wenn der Nutzer nach einer Figur fragt, gib ohne Freigabe nur spoilerarme Basisinformationen:
+  Wer ist die Figur grundsätzlich? Wo/ungefähr wann begegnet man ihr? Welche spoilerfreie Rolle hat sie?
+- Ein bloßer Name oder eine allgemeine Frage ist NIEMALS eine Spoilerfreigabe.
+- Wenn eine Frage ohne Spoiler nicht sinnvoll beantwortbar ist, sage kurz, dass die Antwort Spoiler
+  enthalten würde, und bitte um ausdrückliche Freigabe.
+- Wenn Spoiler für die aktuelle Anfrage ausdrücklich erlaubt sind, markiere größere Enthüllungen
+  weiterhin mit **⚠️ SPOILER**.
+- Bei Unsicherheit immer die spoilerärmere Antwort wählen.
+
 
 ANTWORTSTIL
 - Standardmäßig Deutsch.
@@ -430,6 +460,30 @@ def should_use_web(question: str) -> bool:
     return any(term in q for term in triggers)
 
 
+
+def request_explicitly_allows_spoilers(question: str) -> bool:
+    q = question.lower()
+    return any(phrase in q for phrase in SINGLE_REQUEST_SPOILER_PHRASES)
+
+
+def spoilers_allowed_for_request(channel_id: int, question: str) -> bool:
+    # Persistente Channel-Freigabe ODER ausdrückliche Freigabe nur für diese Anfrage.
+    return channel_id in spoiler_enabled_channels or request_explicitly_allows_spoilers(question)
+
+
+def spoiler_status_text(channel_id: int) -> str:
+    if channel_id in spoiler_enabled_channels:
+        return (
+            "🔓 **Spoiler sind in diesem Channel derzeit ERLAUBT.**\n"
+            "Mit `/spoiler aus` aktivierst du den vollständigen Spoilerschutz wieder."
+        )
+    return (
+        "🔒 **Spoilerschutz ist AKTIV.**\n"
+        "KI-Catnip vermeidet wichtige Storyenthüllungen. "
+        "Mit `/spoiler an` kannst du Spoiler für diesen Channel ausdrücklich erlauben."
+    )
+
+
 async def ask_ai(channel_id: int, username: str, question: str, *, remember=True, force_web=False):
     if budget_exhausted():
         raise RuntimeError(
@@ -449,7 +503,18 @@ async def ask_ai(channel_id: int, username: str, question: str, *, remember=True
                 )
             )
 
-    user_text = f"{username}: {question}"
+    allow_spoilers = spoilers_allowed_for_request(channel_id, question)
+
+    spoiler_instruction = (
+        "SPOILERFREIGABE FÜR DIESE ANFRAGE: JA. Größere Enthüllungen weiterhin deutlich markieren."
+        if allow_spoilers
+        else
+        "SPOILERFREIGABE FÜR DIESE ANFRAGE: NEIN. Strikter Spoilerschutz. "
+        "Keine Tode, Verrate, Identitätsenthüllungen, Bossidentitäten, Schicksale, "
+        "Storywendungen oder spätere Ereignisse verraten."
+    )
+
+    user_text = f"{username}: {question}\n\n{spoiler_instruction}"
     contents.append(
         types.Content(
             role="user",
@@ -805,6 +870,16 @@ async def create_private_ffxiv_channel(member: discord.Member):
         ),
         inline=False,
     )
+    embed.add_field(
+        name="🔒 Spoilerschutz",
+        value=(
+            "Standardmäßig sind **alle wichtigen Storyspoiler gesperrt**.\n"
+            "`/spoiler an` – Spoiler für diesen Channel erlauben\n"
+            "`/spoiler aus` – Spoilerschutz wieder aktivieren\n"
+            "`/spoiler status` – aktuellen Zustand prüfen"
+        ),
+        inline=False,
+    )
     embed.set_footer(
         text="Der Channel ist nur für dich, den Bot und freigeschaltete Administratoren sichtbar."
     )
@@ -841,6 +916,7 @@ async def on_member_remove(member: discord.Member):
         # Gesprächskontext ebenfalls entfernen.
         history.pop(channel.id, None)
         private_user_last_activity.pop(channel.id, None)
+        spoiler_enabled_channels.discard(channel.id)
         await channel.delete(
             reason=f"Mitglied {member} hat den Server verlassen"
         )
@@ -1608,11 +1684,54 @@ async def budget(interaction: discord.Interaction):
     )
 
 
+
+@client.tree.command(
+    name="spoiler",
+    description="Schaltet Story-Spoiler für diesen privaten Channel an oder aus."
+)
+@app_commands.describe(modus="Spoiler erlauben, sperren oder Status anzeigen")
+@app_commands.choices(modus=[
+    app_commands.Choice(name="Aus – Spoilerschutz aktiv", value="aus"),
+    app_commands.Choice(name="An – Spoiler erlauben", value="an"),
+    app_commands.Choice(name="Status anzeigen", value="status"),
+])
+async def spoiler(
+    interaction: discord.Interaction,
+    modus: app_commands.Choice[str],
+):
+    channel_id = interaction.channel_id
+
+    if modus.value == "an":
+        spoiler_enabled_channels.add(channel_id)
+        await interaction.response.send_message(
+            "🔓 **Spoiler wurden für diesen Channel ausdrücklich freigegeben.**\n"
+            "KI-Catnip darf jetzt auch wichtige Storyenthüllungen nennen. "
+            "Mit `/spoiler aus` kannst du den Schutz jederzeit wieder aktivieren.",
+            ephemeral=True,
+        )
+        return
+
+    if modus.value == "aus":
+        spoiler_enabled_channels.discard(channel_id)
+        await interaction.response.send_message(
+            "🔒 **Spoilerschutz aktiviert.**\n"
+            "KI-Catnip verrät ab jetzt keine wichtigen Storyenthüllungen mehr.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        spoiler_status_text(channel_id),
+        ephemeral=True,
+    )
+
+
 @client.tree.command(name="reset", description="Löscht den Gesprächsverlauf dieses Channels.")
 async def reset(interaction: discord.Interaction):
     history.pop(interaction.channel_id, None)
+    spoiler_enabled_channels.discard(interaction.channel_id)
     await interaction.response.send_message(
-        "🧹 **Gesprächsverlauf gelöscht.**",
+        "🧹 **Gesprächsverlauf gelöscht.**\n🔒 Spoilerschutz wurde ebenfalls wieder aktiviert.",
         ephemeral=True,
     )
 
@@ -1666,6 +1785,11 @@ async def botinfo(interaction: discord.Interaction):
         name="🌐 Websuche",
         value="Aktiv" if WEB_SEARCH else "Deaktiviert",
         inline=True,
+    )
+    embed.add_field(
+        name="🔒 Spoilerschutz",
+        value="Standardmäßig aktiv · `/spoiler an|aus|status`",
+        inline=False,
     )
     embed.set_footer(text=f"Modell: {GEMINI_MODEL}")
     await interaction.response.send_message(embed=embed)

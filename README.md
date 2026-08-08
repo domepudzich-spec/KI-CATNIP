@@ -1,4 +1,58 @@
 
+# SPOILER-SAFE VERSION
+
+Diese Version von KI-Catnip verwendet **Spoiler standardmäßig AUS**.
+
+Ohne ausdrückliche Freigabe darf KI-Catnip keine wichtigen Storyenthüllungen
+verraten. Dazu gehören insbesondere Tode, Verrat, geheime Identitäten,
+Bossidentitäten, spätere Formen, zentrale Wendungen und Schicksale von Figuren.
+
+## Befehle
+
+```text
+/spoiler aus
+```
+
+Aktiviert den vollständigen Spoilerschutz. Das ist der Standard.
+
+```text
+/spoiler an
+```
+
+Erlaubt Spoiler dauerhaft für den aktuellen privaten Channel.
+
+```text
+/spoiler status
+```
+
+Zeigt den aktuellen Zustand.
+
+`/reset` löscht nicht nur den Gesprächskontext, sondern setzt den Channel
+automatisch wieder auf **Spoiler AUS**.
+
+## Einmalige Freigabe
+
+Formulierungen wie:
+
+```text
+@KI-Catnip Du darfst spoilern: Erzähl mir die komplette Geschichte von ...
+```
+
+erlauben Spoiler nur für diese konkrete Anfrage, ohne den Channel dauerhaft
+freizuschalten.
+
+## Verhalten bei normalen Fragen
+
+Beispiel:
+
+```text
+@KI-Catnip Wer ist Haurchefant?
+```
+
+KI-Catnip darf nur spoilerarme Basisinformationen geben. Spätere Schicksale
+oder Wendungen dürfen nicht genannt werden.
+
+
 
 # GEMINI FREE-TIER VERSION
 
