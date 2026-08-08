@@ -2194,6 +2194,345 @@ async def botinfo(interaction: discord.Interaction):
 
 
 
+
+# ============================================================
+# STUFE 7.1 — DAUERHAFTE FFXIV-CHARAKTERPROFILE
+# ============================================================
+
+CHARACTER_DATA_PREFIX = "KI_CATNIP_CHARACTER_V1:"
+
+
+def _character_message_prefix(user_id: int) -> str:
+    return f"{CHARACTER_DATA_PREFIX}{int(user_id)}:"
+
+
+async def _find_character_message(channel: discord.TextChannel, user_id: int):
+    prefix = _character_message_prefix(user_id)
+    async for message in channel.history(limit=200):
+        if message.author == channel.guild.me and message.content.startswith(prefix):
+            return message
+    return None
+
+
+async def load_character_profile(guild: discord.Guild, user_id: int):
+    """
+    Lädt ein einzelnes Charakterprofil aus dem versteckten KI-Catnip-Datenchannel.
+    """
+    try:
+        channel = await _get_or_create_profile_data_channel(guild)
+        message = await _find_character_message(channel, user_id)
+        if not message:
+            return None
+
+        raw = message.content[len(_character_message_prefix(user_id)):].strip()
+        data = json.loads(raw or "{}")
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        print(f"Charakterprofil-Ladefehler: {type(exc).__name__}: {exc}")
+        return None
+
+
+async def save_character_profile(guild: discord.Guild, user_id: int, data: dict):
+    """
+    Speichert ein Charakterprofil als eigene Discord-Nachricht.
+    So stößt das System deutlich später an Discord-Limits als bei einer gemeinsamen JSON-Datei.
+    """
+    channel = await _get_or_create_profile_data_channel(guild)
+    message = await _find_character_message(channel, user_id)
+
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    content = _character_message_prefix(user_id) + payload
+
+    if len(content) > 1950:
+        raise RuntimeError(
+            "Das Charakterprofil ist zu lang für die Discord-Speicherung. "
+            "Kürze bitte Persönlichkeit oder Hintergrundgeschichte."
+        )
+
+    if message:
+        await message.edit(content=content)
+    else:
+        await channel.send(content)
+
+
+async def delete_character_profile(guild: discord.Guild, user_id: int):
+    channel = await _get_or_create_profile_data_channel(guild)
+    message = await _find_character_message(channel, user_id)
+    if not message:
+        return False
+
+    await message.delete()
+    return True
+
+
+def character_profile_embed(data: dict, owner_name: str) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"📜 {data.get('charname', 'Unbekannter Charakter')}",
+        description=f"FFXIV-Charakterprofil von **{owner_name}**",
+    )
+    embed.add_field(
+        name="🧬 Volk",
+        value=data.get("volk") or "Nicht angegeben",
+        inline=True,
+    )
+    embed.add_field(
+        name="⚧ Geschlecht",
+        value=data.get("geschlecht") or "Nicht angegeben",
+        inline=True,
+    )
+    embed.add_field(
+        name="⚔️ Hauptjob",
+        value=data.get("hauptjob") or "Nicht angegeben",
+        inline=True,
+    )
+    embed.add_field(
+        name="🏘️ Herkunft",
+        value=data.get("herkunft") or "Nicht angegeben",
+        inline=False,
+    )
+    embed.add_field(
+        name="💭 Persönlichkeit",
+        value=data.get("persoenlichkeit") or "Nicht angegeben",
+        inline=False,
+    )
+    embed.add_field(
+        name="📖 Hintergrundgeschichte",
+        value=data.get("hintergrund") or "Nicht angegeben",
+        inline=False,
+    )
+    embed.set_footer(
+        text="KI-Catnip • Charakterprofil Stufe 7.1"
+    )
+    return embed
+
+
+@client.tree.command(
+    name="charaktererstellen",
+    description="Erstellt dein dauerhaftes persönliches FFXIV-Charakterprofil."
+)
+@app_commands.describe(
+    name="Name deines FFXIV-Charakters",
+    volk="Volk, z. B. Hyuran, Miqo'te, Elezen, Au Ra, Viera",
+    geschlecht="Optional: Geschlecht/Identität deines Charakters",
+    hauptjob="Hauptjob deines Charakters",
+    herkunft="Herkunft oder Heimatort",
+    persoenlichkeit="Kurze Beschreibung der Persönlichkeit",
+    hintergrund="Kurze Hintergrundgeschichte",
+)
+async def charaktererstellen(
+    interaction: discord.Interaction,
+    name: str,
+    volk: str,
+    hauptjob: str,
+    geschlecht: str = "",
+    herkunft: str = "",
+    persoenlichkeit: str = "",
+    hintergrund: str = "",
+):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Charakterprofile funktionieren nur auf einem Discord-Server.",
+            ephemeral=True,
+        )
+        return
+
+    existing = await load_character_profile(interaction.guild, interaction.user.id)
+    if existing:
+        await interaction.response.send_message(
+            "📜 Du hast bereits ein Charakterprofil. "
+            "Nutze `/charakterbearbeiten`, um es zu ändern.",
+            ephemeral=True,
+        )
+        return
+
+    data = {
+        "user_id": interaction.user.id,
+        "discord_name": interaction.user.display_name,
+        "charname": name.strip(),
+        "volk": volk.strip(),
+        "geschlecht": geschlecht.strip(),
+        "hauptjob": hauptjob.strip(),
+        "herkunft": herkunft.strip(),
+        "persoenlichkeit": persoenlichkeit.strip(),
+        "hintergrund": hintergrund.strip(),
+    }
+
+    try:
+        await save_character_profile(interaction.guild, interaction.user.id, data)
+    except RuntimeError as exc:
+        await interaction.response.send_message(f"⚠️ {exc}", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        "✅ **Dein FFXIV-Charakterprofil wurde gespeichert.**\n"
+        "Mit `/charakterprofil` kannst du es jederzeit anzeigen.",
+        ephemeral=True,
+    )
+
+
+@client.tree.command(
+    name="charakterprofil",
+    description="Zeigt dein oder das FFXIV-Charakterprofil eines anderen Spielers."
+)
+@app_commands.describe(
+    spieler="Optional: Profil eines anderen Discord-Mitglieds anzeigen"
+)
+async def charakterprofil(
+    interaction: discord.Interaction,
+    spieler: discord.Member | None = None,
+):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Charakterprofile funktionieren nur auf einem Discord-Server.",
+            ephemeral=True,
+        )
+        return
+
+    target = spieler or interaction.user
+    data = await load_character_profile(interaction.guild, target.id)
+
+    if not data:
+        if target.id == interaction.user.id:
+            await interaction.response.send_message(
+                "📜 Du hast noch kein Charakterprofil. "
+                "Erstelle eins mit `/charaktererstellen`.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"📜 **{target.display_name}** hat noch kein KI-Catnip-Charakterprofil.",
+                ephemeral=True,
+            )
+        return
+
+    await interaction.response.send_message(
+        embed=character_profile_embed(data, target.display_name)
+    )
+
+
+@client.tree.command(
+    name="charakterbearbeiten",
+    description="Bearbeitet einzelne Angaben deines gespeicherten FFXIV-Charakterprofils."
+)
+@app_commands.describe(
+    name="Optional: neuer Charaktername",
+    volk="Optional: neues Volk",
+    geschlecht="Optional: neues Geschlecht/Identität",
+    hauptjob="Optional: neuer Hauptjob",
+    herkunft="Optional: neue Herkunft",
+    persoenlichkeit="Optional: neue Persönlichkeitsbeschreibung",
+    hintergrund="Optional: neue Hintergrundgeschichte",
+)
+async def charakterbearbeiten(
+    interaction: discord.Interaction,
+    name: str = "",
+    volk: str = "",
+    geschlecht: str = "",
+    hauptjob: str = "",
+    herkunft: str = "",
+    persoenlichkeit: str = "",
+    hintergrund: str = "",
+):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Charakterprofile funktionieren nur auf einem Discord-Server.",
+            ephemeral=True,
+        )
+        return
+
+    data = await load_character_profile(interaction.guild, interaction.user.id)
+    if not data:
+        await interaction.response.send_message(
+            "📜 Du hast noch kein Charakterprofil. "
+            "Erstelle zuerst eines mit `/charaktererstellen`.",
+            ephemeral=True,
+        )
+        return
+
+    updates = {
+        "charname": name.strip(),
+        "volk": volk.strip(),
+        "geschlecht": geschlecht.strip(),
+        "hauptjob": hauptjob.strip(),
+        "herkunft": herkunft.strip(),
+        "persoenlichkeit": persoenlichkeit.strip(),
+        "hintergrund": hintergrund.strip(),
+    }
+
+    changed = []
+    for key, value in updates.items():
+        if value:
+            data[key] = value
+            changed.append(key)
+
+    if not changed:
+        await interaction.response.send_message(
+            "🐾 Du hast keine neuen Angaben eingetragen.",
+            ephemeral=True,
+        )
+        return
+
+    data["discord_name"] = interaction.user.display_name
+
+    try:
+        await save_character_profile(interaction.guild, interaction.user.id, data)
+    except RuntimeError as exc:
+        await interaction.response.send_message(f"⚠️ {exc}", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        "✅ **Charakterprofil aktualisiert.**\n"
+        "Geändert: " + ", ".join(changed),
+        ephemeral=True,
+    )
+
+
+@client.tree.command(
+    name="charakterloeschen",
+    description="Löscht dein dauerhaft gespeichertes KI-Catnip-Charakterprofil."
+)
+@app_commands.describe(
+    bestaetigen="Muss auf Ja gesetzt werden, damit das Profil wirklich gelöscht wird."
+)
+async def charakterloeschen(
+    interaction: discord.Interaction,
+    bestaetigen: bool = False,
+):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Charakterprofile funktionieren nur auf einem Discord-Server.",
+            ephemeral=True,
+        )
+        return
+
+    if not bestaetigen:
+        await interaction.response.send_message(
+            "⚠️ Dein Charakterprofil wurde **nicht** gelöscht.\n"
+            "Führe `/charakterloeschen bestaetigen:Ja` aus, wenn du es wirklich entfernen möchtest.",
+            ephemeral=True,
+        )
+        return
+
+    deleted = await delete_character_profile(
+        interaction.guild,
+        interaction.user.id,
+    )
+
+    if not deleted:
+        await interaction.response.send_message(
+            "📜 Du hast aktuell kein gespeichertes Charakterprofil.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        "🗑️ **Dein KI-Catnip-Charakterprofil wurde gelöscht.**\n"
+        "Deine Punkte, Titel und Event-Statistiken bleiben davon unberührt.",
+        ephemeral=True,
+    )
+
+
+
 # ============================================================
 # STUFE 6.1 — DAUERHAFTE SPIELERPROFILE, PUNKTE, TITEL & RANGLISTE
 # ============================================================
@@ -2439,7 +2778,12 @@ def profile_embed(profile: dict) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Stufe 6.2 • Punkte aus Rätseln & Bosskämpfen automatisch gespeichert")
+    embed.add_field(
+        name="📜 FFXIV-Charakter",
+        value="Mit `/charakterprofil` kannst du dein persönliches FFXIV-/RP-Profil anzeigen.",
+        inline=False,
+    )
+    embed.set_footer(text="Stufe 7.1 • Punkteprofil + separates FFXIV-Charakterprofil")
     return embed
 
 
@@ -4169,6 +4513,7 @@ async def on_ready():
     print(f"✓ Bosskämpfe: Stufe 4.3 aktiv (Heilung + K.O. + Wiederbelebung)")
     print(f"✓ Rätsel-Events: Stufe 5.2 aktiv (KI-Rätsel + Preset-Fallback + Endboss)")
     print(f"✓ Spielerprofile: Stufe 6.2 aktiv (Auto-Rewards + Titel + Rangliste)")
+    print(f"✓ Charakterprofile: Stufe 7.1 aktiv (/charaktererstellen, /charakterprofil, /charakterbearbeiten)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
