@@ -981,46 +981,80 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-
+    # Rückkehr-Begrüßung im persönlichen FFXIV-Channel.
     await maybe_send_return_greeting(message)
-    if not client.user or client.user not in message.mentions:
+
+    if not client.user:
         return
 
-    # Entfernt nur die Bot-Erwähnung aus der Frage.
-    mention_patterns = [
-        f"<@{client.user.id}>",
-        f"<@!{client.user.id}>",
-    ]
+    # Robuste Mention-Erkennung:
+    # 1) Discord-Hilfsmethode
+    # 2) message.mentions
+    # 3) rohe <@ID>/<@!ID>-Erwähnung im Nachrichtentext
+    raw_mention = (
+        f"<@{client.user.id}>" in message.content
+        or f"<@!{client.user.id}>" in message.content
+    )
+    mentioned = (
+        client.user.mentioned_in(message)
+        or client.user in message.mentions
+        or raw_mention
+    )
+
+    if not mentioned:
+        return
+
+    print(
+        f"@Mention erkannt: user={message.author} "
+        f"channel={message.channel.id}"
+    )
+
+    # Bot-Erwähnung aus der eigentlichen Frage entfernen.
     question = message.content
-    for pattern in mention_patterns:
-        question = question.replace(pattern, "")
+    question = question.replace(f"<@{client.user.id}>", "")
+    question = question.replace(f"<@!{client.user.id}>", "")
     question = question.strip()
 
     if not question:
         await message.reply(
-            f"🌙 Frag mich einfach etwas zu **FINAL FANTASY XIV**.\n"
+            f"🐱 Frag mich einfach etwas zu **FINAL FANTASY XIV**.\n"
             f"Zum Beispiel: `@{BOT_NAME} Wie funktioniert Viper?`"
         )
         return
 
     async with message.channel.typing():
         try:
+            print(
+                f"@Mention-Frage wird verarbeitet: "
+                f"user={message.author.display_name}"
+            )
             answer = await ask_ai(
                 message.channel.id,
                 message.author.display_name,
                 question,
                 remember=True,
             )
-            await send_channel(message.channel, answer)
+
+            print("@Mention-Antwort erfolgreich erzeugt.")
+
+            for part in split_message(answer):
+                await message.channel.send(part)
+
         except Exception as exc:
-            print(f"Mention-Fehler: {type(exc).__name__}: {exc}")
+            print(
+                f"Mention-Fehler: {type(exc).__name__}: {exc}"
+            )
+
             if str(exc).startswith("MONATSBUDGET_ERREICHT:"):
                 await message.reply(
                     "⚠️ Das monatliche Nutzungslimit des Bots wurde erreicht. "
                     "Weitere KI-Anfragen sind bis zum nächsten Kalendermonat gesperrt."
                 )
             else:
-                await message.reply("⚠️ Der Äther ist gerade instabil. Versuch es bitte erneut.")
+                await message.reply(
+                    "⚠️ Ich konnte deine Frage gerade nicht beantworten. "
+                    "Bitte versuche es noch einmal oder nutze `/ffxiv`."
+                )
 
 
 # ===========================================================================
