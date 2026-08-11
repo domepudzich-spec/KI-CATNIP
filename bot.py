@@ -648,6 +648,40 @@ async def ask_ai(channel_id: int, username: str, question: str, *, remember=True
     return answer
 
 
+
+def friendly_ai_error(exc: Exception) -> str:
+    """
+    Übersetzt häufige KI/API-Fehler in verständliche Discord-Meldungen.
+    Keine Tokens oder Keys werden ausgegeben.
+    """
+    raw = str(exc)
+    upper = raw.upper()
+
+    if "429" in raw or "RESOURCE_EXHAUSTED" in upper or "QUOTA" in upper:
+        return (
+            "🐱 **Mein KI-Kontingent ist gerade ausgeschöpft.**\n"
+            "Normale Bot-, Event-, Profil- und Datenbankfunktionen laufen weiter.\n"
+            "Für freie KI-Antworten, RP und KI-generierte Rätsel versuche es bitte später erneut."
+        )
+
+    if "404" in raw or "NOT_FOUND" in upper:
+        return (
+            "⚠️ **Das eingestellte KI-Modell ist gerade nicht verfügbar.**\n"
+            "Ein Administrator sollte das konfigurierte Gemini-Modell prüfen."
+        )
+
+    if "401" in raw or "403" in raw or "PERMISSION" in upper or "UNAUTHENTICATED" in upper:
+        return (
+            "⚠️ **Die KI konnte nicht auf die API zugreifen.**\n"
+            "Bitte einen Administrator bitten, API-Key und Berechtigungen zu prüfen."
+        )
+
+    return (
+        "⚠️ **Die KI-Anfrage konnte gerade nicht beantwortet werden.**\n"
+        "Die übrigen KI-Catnip-Funktionen sind weiterhin verfügbar."
+    )
+
+
 async def send_interaction(interaction, prompt, *, remember=False, force_web=False):
     await interaction.response.defer(thinking=True)
 
@@ -669,10 +703,7 @@ async def send_interaction(interaction, prompt, *, remember=False, force_web=Fal
                 "Weitere KI-Anfragen sind bis zum nächsten Kalendermonat gesperrt."
             )
         else:
-            await interaction.followup.send(
-                "⚠️ Die Anfrage konnte gerade nicht beantwortet werden. "
-                "Prüfe die Bot-Konsole und API-Einstellungen."
-            )
+            await interaction.followup.send(friendly_ai_error(exc), ephemeral=True)
 
 
 async def send_channel(channel, text):
@@ -1384,7 +1415,7 @@ async def einsteiger(interaction: discord.Interaction, frage: str):
 
 @client.tree.command(
     name="spielersuche",
-    description="Sucht einen öffentlichen FFXIV-Spielercharakter über den Lodestone."
+    description="Erstellt eine direkte Lodestone-Suche nach einem FFXIV-Spielercharakter."
 )
 @app_commands.describe(
     name="Vor- und Nachname des FFXIV-Charakters",
@@ -1395,50 +1426,94 @@ async def spielersuche(
     name: str,
     welt: str = "",
 ):
-    prompt = f"""
-Suche nach einem öffentlich sichtbaren FINAL FANTASY XIV Spielercharakter.
+    from urllib.parse import quote_plus
 
-CHARAKTERNAME:
-{name}
+    clean_name = " ".join(name.split())
+    clean_world = " ".join(welt.split())
 
-HEIMATWELT:
-{welt or "nicht angegeben"}
+    query = clean_name
+    if clean_world:
+        query += f" {clean_world}"
 
-WICHTIGE REGELN:
-- Nutze vorrangig bzw. ausschließlich den offiziellen FINAL FANTASY XIV Lodestone.
-- Wenn keine eindeutige Übereinstimmung gefunden wird, sage das klar.
-- Wenn mehrere Charaktere mit diesem Namen existieren, liste die plausibelsten Treffer
-  mit Charaktername und Heimatwelt auf, statt einen davon willkürlich auszuwählen.
-- Erfinde keine Charakterdaten.
-- Nutze ausschließlich öffentlich sichtbare Informationen.
-- Keine Rückschlüsse auf Square-Enix-Account, echte Identität, E-Mail, Wohnort
-  oder andere nicht öffentlich sichtbare Kontodaten.
-- Wenn eine Heimatwelt angegeben wurde, priorisiere exakt diese Welt.
-
-WENN EIN EINDEUTIGER TREFFER GEFUNDEN WIRD:
-Gib die öffentlich sichtbaren Informationen möglichst kompakt in dieser Reihenfolge aus:
-
-1. **Charaktername**
-2. **Heimatwelt**
-3. **Datenzentrum**, falls zuverlässig bestimmbar
-4. **Volk / Stamm**, sofern öffentlich sichtbar
-5. **Stadtstaat**, sofern öffentlich sichtbar
-6. **Staatliche Gesellschaft**, sofern öffentlich sichtbar
-7. **Freie Gesellschaft**, sofern öffentlich sichtbar
-8. **Jobs / Klassen**, nur soweit öffentlich sichtbar und zuverlässig
-9. **Lodestone-Hinweis**, dass die Daten aus dem öffentlichen Profil stammen
-
-Verlinke, wenn zuverlässig gefunden, das offizielle Lodestone-Profil als Quelle.
-
-Antworte auf Deutsch.
-""".strip()
-
-    await send_interaction(
-        interaction,
-        prompt,
-        remember=False,
-        force_web=True,
+    # Offizielle Lodestone-Charaktersuche, ohne Gemini/API-Aufruf.
+    lodestone_url = (
+        "https://de.finalfantasyxiv.com/lodestone/character/"
+        f"?q={quote_plus(clean_name)}"
     )
+
+    embed = discord.Embed(
+        title="🔎 FFXIV-Spielersuche",
+        description=(
+            f"Suche nach **{clean_name}**"
+            + (f" auf **{clean_world}**" if clean_world else "")
+            + ".\n\n"
+            "Diese Suche benötigt **kein Gemini-Kontingent**."
+        ),
+    )
+    embed.add_field(
+        name="🌐 Offizieller Lodestone",
+        value=(
+            f"[Charaktersuche öffnen]({lodestone_url})\n"
+            "Falls mehrere Treffer erscheinen, wähle den Charakter mit der passenden Heimatwelt."
+        ),
+        inline=False,
+    )
+    if clean_world:
+        embed.add_field(
+            name="🏠 Heimatwelt",
+            value=clean_world,
+            inline=True,
+        )
+    embed.add_field(
+        name="🐾 Catnip-Tipp",
+        value=(
+            "Wenn du anschließend Details zu einem gefundenen Profil erklärt haben möchtest, "
+            "kannst du Catnip separat danach fragen. Dafür wird dann nur bei Bedarf KI-Kontingent verwendet."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Direkte Lodestone-Suche • 0 Gemini-Anfragen")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+
+@client.tree.command(
+    name="sparmodus",
+    description="Zeigt, welche KI-Catnip-Funktionen Gemini-Kontingent verbrauchen."
+)
+async def sparmodus(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🐱 KI-Catnip — Sparmodus",
+        description=(
+            "KI-Catnip nutzt Gemini nur dort, wo echte KI nötig ist. "
+            "Viele Verwaltungs- und Datenfunktionen laufen ohne KI-Kontingent."
+        ),
+    )
+    embed.add_field(
+        name="✅ Ohne Gemini",
+        value=(
+            "`/spielersuche` · Event-Anmeldungen · Bosskämpfe · Punkte/Profile · "
+            "Schattenpfoten-Wissensdatenbank · Spoiler-Fortschritt · Admin-/Diagnose-Menüs"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🧠 Mit Gemini",
+        value=(
+            "Freie FFXIV-Fragen · RP-Szenen · RP-Quests · KI-generierte Rätsel "
+            "und andere frei generierte Inhalte"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="⚠️ Wenn das Kontingent leer ist",
+        value=(
+            "Catnip zeigt jetzt eine verständliche 429-/Quota-Meldung. "
+            "Die nicht-KI-basierten Funktionen laufen trotzdem weiter."
+        ),
+        inline=False,
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @client.tree.command(
@@ -6999,7 +7074,7 @@ async def on_ready():
     print(f"✓ Event-Admin-Dashboard aktiv (/eventadmin)")
     print(f"✓ Schattenpfoten-Wissensdatenbank aktiv (/wissen, /wissensadmin)")
     print(f"✓ Systemdiagnose: Stufe 10 aktiv (/diagnose)")
-    print(f"✓ Spielersuche: Stufe 10.1 aktiv (/spielersuche)")
+    print(f"✓ Sparmodus: Stufe 10.2 aktiv (Fallback + geminifreie Spielersuche)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
