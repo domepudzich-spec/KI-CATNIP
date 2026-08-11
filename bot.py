@@ -977,7 +977,7 @@ async def create_private_ffxiv_channel(member: discord.Member):
         embed.add_field(
             name="🔎 Suche & Nachschlagen",
             value=(
-                "`/charakter` – Spielercharakter suchen\n"
+                "`/charakter` – einfache Charaktersuche\n`/spielersuche` – erweiterte Lodestone-Spielersuche\n"
                 "`/mount` – Mount-Herkunft und Freischaltung\n"
                 "`/minion` – Minion-Herkunft und Freischaltung\n"
                 "`/markt` – Marktbrettdaten über Universalis\n"
@@ -1074,7 +1074,7 @@ async def create_private_ffxiv_channel(member: discord.Member):
         embed.add_field(
             name="🔎 Suchen & Nachschlagen",
             value=(
-                "`/charakter` – Spielercharakter suchen\n"
+                "`/charakter` – einfache Charaktersuche\n`/spielersuche` – erweiterte Lodestone-Spielersuche\n"
                 "`/mount` – Mount-Herkunft und Freischaltung\n"
                 "`/minion` – Minion-Herkunft und Freischaltung\n"
                 "`/markt` – Marktbrettdaten über Universalis\n"
@@ -1375,6 +1375,111 @@ async def einsteiger(interaction: discord.Interaction, frage: str):
         interaction,
         f"Erkläre diese FFXIV-Frage besonders einsteigerfreundlich: {frage}",
     )
+
+
+
+# ============================================================
+# STUFE 10.1 — ERWEITERTE FFXIV-SPIELERSUCHE
+# ============================================================
+
+@client.tree.command(
+    name="spielersuche",
+    description="Sucht einen öffentlichen FFXIV-Spielercharakter über den Lodestone."
+)
+@app_commands.describe(
+    name="Vor- und Nachname des FFXIV-Charakters",
+    welt="Optional: Heimatwelt/Server, z. B. Shiva, Odin oder Phoenix",
+)
+async def spielersuche(
+    interaction: discord.Interaction,
+    name: str,
+    welt: str = "",
+):
+    prompt = f"""
+Suche nach einem öffentlich sichtbaren FINAL FANTASY XIV Spielercharakter.
+
+CHARAKTERNAME:
+{name}
+
+HEIMATWELT:
+{welt or "nicht angegeben"}
+
+WICHTIGE REGELN:
+- Nutze vorrangig bzw. ausschließlich den offiziellen FINAL FANTASY XIV Lodestone.
+- Wenn keine eindeutige Übereinstimmung gefunden wird, sage das klar.
+- Wenn mehrere Charaktere mit diesem Namen existieren, liste die plausibelsten Treffer
+  mit Charaktername und Heimatwelt auf, statt einen davon willkürlich auszuwählen.
+- Erfinde keine Charakterdaten.
+- Nutze ausschließlich öffentlich sichtbare Informationen.
+- Keine Rückschlüsse auf Square-Enix-Account, echte Identität, E-Mail, Wohnort
+  oder andere nicht öffentlich sichtbare Kontodaten.
+- Wenn eine Heimatwelt angegeben wurde, priorisiere exakt diese Welt.
+
+WENN EIN EINDEUTIGER TREFFER GEFUNDEN WIRD:
+Gib die öffentlich sichtbaren Informationen möglichst kompakt in dieser Reihenfolge aus:
+
+1. **Charaktername**
+2. **Heimatwelt**
+3. **Datenzentrum**, falls zuverlässig bestimmbar
+4. **Volk / Stamm**, sofern öffentlich sichtbar
+5. **Stadtstaat**, sofern öffentlich sichtbar
+6. **Staatliche Gesellschaft**, sofern öffentlich sichtbar
+7. **Freie Gesellschaft**, sofern öffentlich sichtbar
+8. **Jobs / Klassen**, nur soweit öffentlich sichtbar und zuverlässig
+9. **Lodestone-Hinweis**, dass die Daten aus dem öffentlichen Profil stammen
+
+Verlinke, wenn zuverlässig gefunden, das offizielle Lodestone-Profil als Quelle.
+
+Antworte auf Deutsch.
+""".strip()
+
+    await send_interaction(
+        interaction,
+        prompt,
+        remember=False,
+        force_web=True,
+    )
+
+
+@client.tree.command(
+    name="spielersuchehilfe",
+    description="Zeigt Beispiele für die KI-Catnip-Spielersuche."
+)
+async def spielersuchehilfe(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🔎 KI-Catnip — FFXIV-Spielersuche",
+        description=(
+            "Suche nach öffentlich sichtbaren Spielercharakteren über den "
+            "**FINAL FANTASY XIV Lodestone**."
+        ),
+    )
+    embed.add_field(
+        name="Beispiel",
+        value=(
+            "`/spielersuche name:Vorname Nachname`\n"
+            "`/spielersuche name:Vorname Nachname welt:Shiva`"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="💡 Tipp",
+        value=(
+            "Wenn ein Name mehrfach vorkommt, gib die **Heimatwelt** mit an. "
+            "Damit kann KI-Catnip den richtigen Charakter deutlich besser eingrenzen."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🔒 Datenschutz",
+        value=(
+            "KI-Catnip verwendet nur öffentlich sichtbare Charakterinformationen "
+            "und versucht nicht, private Account- oder Identitätsdaten zu ermitteln."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Stufe 10.1 • Erweiterte FFXIV-Spielersuche")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 
 # ===========================================================================
@@ -6894,6 +6999,7 @@ async def on_ready():
     print(f"✓ Event-Admin-Dashboard aktiv (/eventadmin)")
     print(f"✓ Schattenpfoten-Wissensdatenbank aktiv (/wissen, /wissensadmin)")
     print(f"✓ Systemdiagnose: Stufe 10 aktiv (/diagnose)")
+    print(f"✓ Spielersuche: Stufe 10.1 aktiv (/spielersuche)")
     print(f"✓ Private FFXIV-Channels: {'aktiv' if PRIVATE_CHANNELS_ENABLED else 'deaktiviert'}")
     print(f"✓ Websuche: {'aktiv' if WEB_SEARCH else 'deaktiviert'}")
     print(f"✓ Monatsbudget: {MONTHLY_BUDGET_EUR:.2f} EUR")
